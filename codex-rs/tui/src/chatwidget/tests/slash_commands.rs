@@ -432,6 +432,77 @@ async fn slash_resume_opens_picker() {
 }
 
 #[tokio::test]
+async fn slash_resume_opens_picker_during_mcp_startup_only() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+
+    chat.dispatch_command(SlashCommand::Resume);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
+async fn typed_slash_resume_opens_picker_during_mcp_startup_only() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+    chat.bottom_pane
+        .set_composer_text("/resume".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
+async fn slash_resume_stays_blocked_during_active_turn_even_with_mcp_startup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+
+    chat.dispatch_command(SlashCommand::Resume);
+
+    let event = rx.try_recv().expect("expected disabled command error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(
+                rendered.contains("'/resume' is disabled while a task is in progress."),
+                "expected /resume task-running error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_fork_requests_current_fork() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -595,6 +666,76 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
         "expected fast-mode persistence app event; events: {events:?}"
     );
 
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn fast_slash_command_applies_while_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.dispatch_command(SlashCommand::Fast);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                service_tier: Some(Some(ServiceTier::Fast)),
+                ..
+            })
+        )),
+        "expected fast-mode override app event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistServiceTierSelection {
+                service_tier: Some(ServiceTier::Fast),
+            }
+        )),
+        "expected fast-mode persistence app event; events: {events:?}"
+    );
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn typed_fast_slash_command_applies_while_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.bottom_pane
+        .set_composer_text("/fast on".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::OverrideTurnContext {
+                service_tier: Some(Some(ServiceTier::Fast)),
+                ..
+            })
+        )),
+        "expected fast-mode override app event; events: {events:?}"
+    );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 

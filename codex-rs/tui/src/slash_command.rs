@@ -66,6 +66,14 @@ pub enum SlashCommand {
     MemoryUpdate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashCommandRunningState {
+    Idle,
+    McpStartupOnly,
+    AgentTurnOnly,
+    AgentTurnWithMcpStartup,
+}
+
 impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
@@ -146,7 +154,6 @@ impl SlashCommand {
             | SlashCommand::Compact
             // | SlashCommand::Undo
             | SlashCommand::Model
-            | SlashCommand::Fast
             | SlashCommand::Personality
             | SlashCommand::Approvals
             | SlashCommand::Permissions
@@ -163,6 +170,7 @@ impl SlashCommand {
             | SlashCommand::Copy
             | SlashCommand::Rename
             | SlashCommand::Mention
+            | SlashCommand::Fast
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::DebugConfig
@@ -183,6 +191,21 @@ impl SlashCommand {
             SlashCommand::Statusline => false,
             SlashCommand::Theme => false,
             SlashCommand::Title => false,
+        }
+    }
+
+    pub fn is_available(self, running_state: SlashCommandRunningState) -> bool {
+        match running_state {
+            SlashCommandRunningState::Idle => true,
+            SlashCommandRunningState::McpStartupOnly => {
+                if self == SlashCommand::Resume {
+                    true
+                } else {
+                    self.available_during_task()
+                }
+            }
+            SlashCommandRunningState::AgentTurnOnly
+            | SlashCommandRunningState::AgentTurnWithMcpStartup => self.available_during_task(),
         }
     }
 
@@ -210,6 +233,7 @@ mod tests {
     use std::str::FromStr;
 
     use super::SlashCommand;
+    use super::SlashCommandRunningState;
 
     #[test]
     fn stop_command_is_canonical_name() {
@@ -219,5 +243,14 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn resume_is_available_during_mcp_startup_only() {
+        assert!(SlashCommand::Resume.is_available(SlashCommandRunningState::McpStartupOnly));
+        assert!(!SlashCommand::Resume.is_available(SlashCommandRunningState::AgentTurnOnly));
+        assert!(
+            !SlashCommand::Resume.is_available(SlashCommandRunningState::AgentTurnWithMcpStartup)
+        );
     }
 }

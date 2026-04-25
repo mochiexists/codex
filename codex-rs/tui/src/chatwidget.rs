@@ -343,6 +343,7 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
+use crate::slash_command::SlashCommandRunningState;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
@@ -1668,7 +1669,27 @@ impl ChatWidget {
     fn update_task_running_state(&mut self) {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.bottom_pane
+            .set_slash_command_running_state(self.slash_command_running_state());
         self.refresh_terminal_title();
+    }
+
+    fn slash_command_running_state(&self) -> SlashCommandRunningState {
+        match (self.agent_turn_running, self.mcp_startup_status.is_some()) {
+            (false, false) => SlashCommandRunningState::Idle,
+            (false, true) => SlashCommandRunningState::McpStartupOnly,
+            (true, false) => SlashCommandRunningState::AgentTurnOnly,
+            (true, true) => SlashCommandRunningState::AgentTurnWithMcpStartup,
+        }
+    }
+
+    fn effective_slash_command_running_state(&self) -> SlashCommandRunningState {
+        let running_state = self.slash_command_running_state();
+        if running_state == SlashCommandRunningState::Idle && self.bottom_pane.is_task_running() {
+            SlashCommandRunningState::AgentTurnOnly
+        } else {
+            running_state
+        }
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -3943,6 +3964,9 @@ impl ChatWidget {
     }
 
     fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
+        if !Self::should_render_hook_started(&event) {
+            return;
+        }
         let label = hook_event_label(event.run.event_name);
         let mut message = format!("Running {label} hook");
         if let Some(status_message) = event.run.status_message
@@ -3956,6 +3980,9 @@ impl ChatWidget {
     }
 
     fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
+        if !Self::should_render_hook_completed(&event) {
+            return;
+        }
         let status = format!("{:?}", event.run.status).to_lowercase();
         let header = format!("{} hook ({status})", hook_event_label(event.run.event_name));
         let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
@@ -3971,6 +3998,19 @@ impl ChatWidget {
         }
         self.add_to_history(PlainHistoryCell::new(lines));
         self.request_redraw();
+    }
+
+    fn should_render_hook_started(event: &codex_protocol::protocol::HookStartedEvent) -> bool {
+        event
+            .run
+            .status_message
+            .as_deref()
+            .is_some_and(|status_message| !status_message.trim().is_empty())
+    }
+
+    fn should_render_hook_completed(event: &codex_protocol::protocol::HookCompletedEvent) -> bool {
+        event.run.status != codex_protocol::protocol::HookRunStatus::Completed
+            || !event.run.entries.is_empty()
     }
 
     #[cfg(test)]
@@ -4989,7 +5029,7 @@ impl ChatWidget {
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if !cmd.is_available(self.effective_slash_command_running_state()) {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -5354,7 +5394,7 @@ impl ChatWidget {
             self.dispatch_command(cmd);
             return;
         }
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if !cmd.is_available(self.effective_slash_command_running_state()) {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -11020,6 +11060,7 @@ fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'st
         codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
         codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::SessionEnd => "SessionEnd",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",
     }

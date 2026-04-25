@@ -176,6 +176,7 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
+use crate::slash_command::SlashCommandRunningState;
 use crate::style::user_message_style;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
@@ -298,6 +299,7 @@ pub(crate) struct ChatComposer {
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
     is_task_running: bool,
+    slash_command_running_state: SlashCommandRunningState,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
     input_disabled_placeholder: Option<String>,
@@ -426,6 +428,7 @@ impl ChatComposer {
             attached_images: Vec::new(),
             placeholder_text,
             is_task_running: false,
+            slash_command_running_state: SlashCommandRunningState::Idle,
             input_enabled: true,
             input_disabled_placeholder: None,
             paste_burst: PasteBurst::default(),
@@ -2337,7 +2340,7 @@ impl ChatComposer {
     }
 
     fn reject_slash_command_if_unavailable(&self, cmd: SlashCommand) -> bool {
-        if !self.is_task_running || cmd.available_during_task() {
+        if cmd.is_available(self.slash_command_running_state) {
             return false;
         }
         let message = format!(
@@ -3286,6 +3289,15 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+        self.slash_command_running_state = if running {
+            SlashCommandRunningState::AgentTurnOnly
+        } else {
+            SlashCommandRunningState::Idle
+        };
+    }
+
+    pub fn set_slash_command_running_state(&mut self, running_state: SlashCommandRunningState) {
+        self.slash_command_running_state = running_state;
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {

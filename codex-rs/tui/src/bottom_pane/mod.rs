@@ -25,6 +25,7 @@ use crate::key_hint::KeyBinding;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
+use crate::slash_command::SlashCommandRunningState;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_core::plugins::PluginCapabilitySummary;
@@ -858,6 +859,13 @@ impl BottomPane {
 
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
+    }
+
+    pub(crate) fn set_slash_command_running_state(
+        &mut self,
+        running_state: SlashCommandRunningState,
+    ) {
+        self.composer.set_slash_command_running_state(running_state);
     }
 
     #[cfg(test)]

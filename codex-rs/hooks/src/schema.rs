@@ -1,3 +1,4 @@
+use codex_protocol::protocol::SessionEndReason;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::r#gen::SchemaSettings;
@@ -17,6 +18,8 @@ const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.js
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
 const PRE_TOOL_USE_INPUT_FIXTURE: &str = "pre-tool-use.command.input.schema.json";
 const PRE_TOOL_USE_OUTPUT_FIXTURE: &str = "pre-tool-use.command.output.schema.json";
+const SESSION_END_INPUT_FIXTURE: &str = "session-end.command.input.schema.json";
+const SESSION_END_OUTPUT_FIXTURE: &str = "session-end.command.output.schema.json";
 const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.json";
 const SESSION_START_OUTPUT_FIXTURE: &str = "session-start.command.output.schema.json";
 const USER_PROMPT_SUBMIT_INPUT_FIXTURE: &str = "user-prompt-submit.command.input.schema.json";
@@ -73,6 +76,8 @@ pub(crate) enum HookEventNameWire {
     PostToolUse,
     #[serde(rename = "SessionStart")]
     SessionStart,
+    #[serde(rename = "SessionEnd")]
+    SessionEnd,
     #[serde(rename = "UserPromptSubmit")]
     UserPromptSubmit,
     #[serde(rename = "Stop")]
@@ -232,6 +237,15 @@ pub(crate) struct SessionStartHookSpecificOutputWire {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "session-end.command.output")]
+pub(crate) struct SessionEndCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "user-prompt-submit.command.output")]
 pub(crate) struct UserPromptSubmitCommandOutputWire {
     #[serde(flatten)]
@@ -272,6 +286,42 @@ pub(crate) struct StopCommandOutputWire {
 pub(crate) enum BlockDecisionWire {
     #[serde(rename = "block")]
     Block,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "session-end.command.input")]
+pub(crate) struct SessionEndCommandInput {
+    pub session_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "session_end_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub reason: SessionEndReason,
+}
+
+impl SessionEndCommandInput {
+    pub(crate) fn new(
+        session_id: impl Into<String>,
+        transcript_path: Option<PathBuf>,
+        cwd: impl Into<String>,
+        model: impl Into<String>,
+        permission_mode: impl Into<String>,
+        reason: SessionEndReason,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            transcript_path: NullableString::from_path(transcript_path),
+            cwd: cwd.into(),
+            hook_event_name: "SessionEnd".to_string(),
+            model: model.into(),
+            permission_mode: permission_mode.into(),
+            reason,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -367,6 +417,14 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
         schema_json::<PreToolUseCommandOutputWire>()?,
     )?;
     write_schema(
+        &generated_dir.join(SESSION_END_INPUT_FIXTURE),
+        schema_json::<SessionEndCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(SESSION_END_OUTPUT_FIXTURE),
+        schema_json::<SessionEndCommandOutputWire>()?,
+    )?;
+    write_schema(
         &generated_dir.join(SESSION_START_INPUT_FIXTURE),
         schema_json::<SessionStartCommandInput>()?,
     )?;
@@ -443,6 +501,10 @@ fn canonicalize_json(value: &Value) -> Value {
         }
         _ => value.clone(),
     }
+}
+
+fn session_end_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("SessionEnd")
 }
 
 fn session_start_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {

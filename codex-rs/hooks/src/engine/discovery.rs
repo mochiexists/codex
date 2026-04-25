@@ -10,103 +10,125 @@ use super::config::HooksFile;
 use super::config::MatcherGroup;
 use crate::events::common::matcher_pattern_for_event;
 use crate::events::common::validate_matcher_pattern;
+use crate::registry::LaunchHook;
 
 pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,
     pub warnings: Vec<String>,
 }
 
-pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -> DiscoveryResult {
-    let Some(config_layer_stack) = config_layer_stack else {
-        return DiscoveryResult {
-            handlers: Vec::new(),
-            warnings: Vec::new(),
-        };
-    };
-
+pub(crate) fn discover_handlers(
+    config_layer_stack: Option<&ConfigLayerStack>,
+    launch_hooks: &[LaunchHook],
+) -> DiscoveryResult {
     let mut handlers = Vec::new();
     let mut warnings = Vec::new();
     let mut display_order = 0_i64;
 
-    for layer in config_layer_stack.get_layers(
-        ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        /*include_disabled*/ false,
-    ) {
-        let Some(folder) = layer.config_folder() else {
-            continue;
-        };
-        let source_path = match folder.join("hooks.json") {
-            Ok(source_path) => source_path,
-            Err(err) => {
-                warnings.push(format!(
-                    "failed to resolve hooks config path from {}: {err}",
-                    folder.display()
-                ));
+    if let Some(config_layer_stack) = config_layer_stack {
+        for layer in config_layer_stack.get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ false,
+        ) {
+            let Some(folder) = layer.config_folder() else {
+                continue;
+            };
+            let source_path = match folder.join("hooks.json") {
+                Ok(source_path) => source_path,
+                Err(err) => {
+                    warnings.push(format!(
+                        "failed to resolve hooks config path from {}: {err}",
+                        folder.display()
+                    ));
+                    continue;
+                }
+            };
+            if !source_path.as_path().is_file() {
                 continue;
             }
-        };
-        if !source_path.as_path().is_file() {
-            continue;
-        }
 
-        let contents = match fs::read_to_string(source_path.as_path()) {
-            Ok(contents) => contents,
-            Err(err) => {
-                warnings.push(format!(
-                    "failed to read hooks config {}: {err}",
-                    source_path.display()
-                ));
-                continue;
-            }
-        };
+            let contents = match fs::read_to_string(source_path.as_path()) {
+                Ok(contents) => contents,
+                Err(err) => {
+                    warnings.push(format!(
+                        "failed to read hooks config {}: {err}",
+                        source_path.display()
+                    ));
+                    continue;
+                }
+            };
 
-        let parsed: HooksFile = match serde_json::from_str(&contents) {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                warnings.push(format!(
-                    "failed to parse hooks config {}: {err}",
-                    source_path.display()
-                ));
-                continue;
-            }
-        };
+            let parsed: HooksFile = match serde_json::from_str(&contents) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    warnings.push(format!(
+                        "failed to parse hooks config {}: {err}",
+                        source_path.display()
+                    ));
+                    continue;
+                }
+            };
 
-        let super::config::HookEvents {
-            pre_tool_use,
-            post_tool_use,
-            session_start,
-            user_prompt_submit,
-            stop,
-        } = parsed.hooks;
-
-        for (event_name, groups) in [
-            (
-                codex_protocol::protocol::HookEventName::PreToolUse,
+            let super::config::HookEvents {
                 pre_tool_use,
-            ),
-            (
-                codex_protocol::protocol::HookEventName::PostToolUse,
                 post_tool_use,
-            ),
-            (
-                codex_protocol::protocol::HookEventName::SessionStart,
                 session_start,
-            ),
-            (
-                codex_protocol::protocol::HookEventName::UserPromptSubmit,
+                session_end,
                 user_prompt_submit,
-            ),
-            (codex_protocol::protocol::HookEventName::Stop, stop),
-        ] {
-            append_matcher_groups(
-                &mut handlers,
-                &mut warnings,
-                &mut display_order,
-                source_path.as_path(),
-                event_name,
-                groups,
-            );
+                stop,
+            } = parsed.hooks;
+
+            for (event_name, groups) in [
+                (
+                    codex_protocol::protocol::HookEventName::PreToolUse,
+                    pre_tool_use,
+                ),
+                (
+                    codex_protocol::protocol::HookEventName::PostToolUse,
+                    post_tool_use,
+                ),
+                (
+                    codex_protocol::protocol::HookEventName::SessionStart,
+                    session_start,
+                ),
+                (
+                    codex_protocol::protocol::HookEventName::SessionEnd,
+                    session_end,
+                ),
+                (
+                    codex_protocol::protocol::HookEventName::UserPromptSubmit,
+                    user_prompt_submit,
+                ),
+                (codex_protocol::protocol::HookEventName::Stop, stop),
+            ] {
+                append_matcher_groups(
+                    &mut handlers,
+                    &mut warnings,
+                    &mut display_order,
+                    source_path.as_path(),
+                    event_name,
+                    groups,
+                );
+            }
         }
+    }
+
+    let launch_source_path = Path::new("<launch>");
+    for launch_hook in launch_hooks {
+        append_group_handlers(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            launch_source_path,
+            launch_hook.event_name,
+            None,
+            vec![HookHandlerConfig::Command {
+                command: launch_hook.command.clone(),
+                timeout_sec: None,
+                r#async: false,
+                status_message: None,
+            }],
+        );
     }
 
     DiscoveryResult { handlers, warnings }
@@ -209,7 +231,9 @@ mod tests {
     use super::ConfiguredHandler;
     use super::HookHandlerConfig;
     use super::append_group_handlers;
+    use super::discover_handlers;
     use crate::events::common::matcher_pattern_for_event;
+    use crate::registry::LaunchHook;
 
     #[test]
     fn user_prompt_submit_ignores_invalid_matcher_during_discovery() {
@@ -334,5 +358,40 @@ mod tests {
         assert_eq!(handlers.len(), 1);
         assert_eq!(handlers[0].event_name, HookEventName::PostToolUse);
         assert_eq!(handlers[0].matcher.as_deref(), Some("Edit|Write"));
+    }
+
+    #[test]
+    fn includes_launch_hooks_without_config_layers() {
+        let discovery = discover_handlers(
+            None,
+            &[
+                LaunchHook {
+                    event_name: HookEventName::SessionStart,
+                    command: "echo session".to_string(),
+                },
+                LaunchHook {
+                    event_name: HookEventName::Stop,
+                    command: "echo stop".to_string(),
+                },
+            ],
+        );
+
+        assert!(discovery.warnings.is_empty());
+        assert_eq!(discovery.handlers.len(), 2);
+        assert_eq!(
+            discovery.handlers[0].event_name,
+            HookEventName::SessionStart
+        );
+        assert_eq!(discovery.handlers[0].command, "echo session");
+        assert_eq!(
+            discovery.handlers[0].source_path.to_string_lossy(),
+            "<launch>"
+        );
+        assert_eq!(discovery.handlers[1].event_name, HookEventName::Stop);
+        assert_eq!(discovery.handlers[1].command, "echo stop");
+        assert_eq!(
+            discovery.handlers[1].source_path.to_string_lossy(),
+            "<launch>"
+        );
     }
 }

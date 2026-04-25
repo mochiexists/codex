@@ -71,6 +71,7 @@ use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
+use codex_protocol::protocol::SessionEndReason;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
@@ -374,7 +375,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PostToolUse, SessionStart, UserPromptSubmit, Stop
+        PreToolUse, PostToolUse, SessionStart, SessionEnd, UserPromptSubmit, Stop
     }
 );
 
@@ -2813,6 +2814,9 @@ pub struct ThreadArchiveResponse {}
 #[ts(export_to = "v2/")]
 pub struct ThreadUnsubscribeParams {
     pub thread_id: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub reason: Option<SessionEndReason>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

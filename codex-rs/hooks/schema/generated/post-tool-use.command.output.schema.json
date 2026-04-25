@@ -13,6 +13,7 @@
         "PreToolUse",
         "PostToolUse",
         "SessionStart",
+        "SessionEnd",
         "UserPromptSubmit",
         "Stop"
       ],

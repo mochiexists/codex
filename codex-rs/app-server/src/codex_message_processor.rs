@@ -278,6 +278,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::SessionEndReason;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
@@ -5364,8 +5365,16 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> ThreadShutdownResult {
-        match tokio::time::timeout(Duration::from_secs(10), thread.shutdown_and_wait()).await {
+    async fn wait_for_thread_shutdown(
+        thread: &Arc<CodexThread>,
+        reason: SessionEndReason,
+    ) -> ThreadShutdownResult {
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            thread.shutdown_and_wait_with_reason(reason),
+        )
+        .await
+        {
             Ok(Ok(())) => ThreadShutdownResult::Complete,
             Ok(Err(_)) => ThreadShutdownResult::SubmitFailed,
             Err(_) => ThreadShutdownResult::TimedOut,
@@ -5448,8 +5457,9 @@ impl CodexMessageProcessor {
             let pending_thread_unloads = self.pending_thread_unloads.clone();
             let thread_manager = self.thread_manager.clone();
             let thread_watch_manager = self.thread_watch_manager.clone();
+            let reason = params.reason.unwrap_or(SessionEndReason::Programmatic);
             tokio::spawn(async move {
-                match Self::wait_for_thread_shutdown(&thread).await {
+                match Self::wait_for_thread_shutdown(&thread, reason).await {
                     ThreadShutdownResult::Complete => {
                         if thread_manager.remove_thread(&thread_id).await.is_none() {
                             info!(
@@ -5567,7 +5577,9 @@ impl CodexMessageProcessor {
                 state_db_ctx = Some(ctx);
             }
             info!("thread {thread_id} was active; shutting down");
-            match Self::wait_for_thread_shutdown(&conversation).await {
+            match Self::wait_for_thread_shutdown(&conversation, SessionEndReason::Programmatic)
+                .await
+            {
                 ThreadShutdownResult::Complete => {}
                 ThreadShutdownResult::SubmitFailed => {
                     error!(

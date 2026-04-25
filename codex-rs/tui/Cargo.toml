@@ -36,6 +36,7 @@ codex-core = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
+codex-hooks = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider-info = { workspace = true }

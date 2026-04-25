@@ -77,7 +77,7 @@ pub(crate) fn matcher_pattern_for_event(
         HookEventName::PreToolUse | HookEventName::PostToolUse | HookEventName::SessionStart => {
             matcher
         }
-        HookEventName::UserPromptSubmit | HookEventName::Stop => None,
+        HookEventName::SessionEnd | HookEventName::UserPromptSubmit | HookEventName::Stop => None,
     }
 }
 
@@ -160,6 +160,10 @@ mod tests {
     fn unsupported_events_ignore_matchers() {
         assert_eq!(
             matcher_pattern_for_event(HookEventName::UserPromptSubmit, Some("^hello")),
+            None
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::SessionEnd, Some("^goodbye$")),
             None
         );
         assert_eq!(

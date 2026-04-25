@@ -114,6 +114,7 @@ use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionEndReason;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
@@ -735,7 +736,13 @@ impl Codex {
     }
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
+        self.shutdown_and_wait_with_reason(SessionEndReason::Programmatic)
+            .await
+    }
+
+    pub async fn shutdown_and_wait_with_reason(&self, reason: SessionEndReason) -> CodexResult<()> {
         let session_loop_termination = self.session_loop_termination.clone();
+        self.session.set_pending_session_end_reason(reason).await;
         match self.submit(Op::Shutdown).await {
             Ok(_) => {}
             Err(CodexErr::InternalAgentDied) => {}
@@ -822,6 +829,7 @@ pub(crate) struct Session {
     /// session.
     features: ManagedFeatures,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
+    pending_session_end_reason: Mutex<SessionEndReason>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     mailbox: Mailbox,
@@ -1248,6 +1256,17 @@ pub(crate) struct AppServerClientMetadata {
 }
 
 impl Session {
+    async fn set_pending_session_end_reason(&self, reason: SessionEndReason) {
+        *self.pending_session_end_reason.lock().await = reason;
+    }
+
+    async fn take_pending_session_end_reason(&self) -> SessionEndReason {
+        let mut guard = self.pending_session_end_reason.lock().await;
+        let reason = *guard;
+        *guard = SessionEndReason::Programmatic;
+        reason
+    }
+
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
         AppServerClientMetadata {
@@ -1891,6 +1910,7 @@ impl Session {
             legacy_notify_argv: config.notify.clone(),
             feature_enabled: config.features.enabled(Feature::CodexHooks),
             config_layer_stack: Some(config.config_layer_stack.clone()),
+            launch_hooks: config.launch_hooks.clone(),
             shell_program: Some(hook_shell_program),
             shell_args: hook_shell_argv,
         });
@@ -1977,6 +1997,7 @@ impl Session {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
+            pending_session_end_reason: Mutex::new(SessionEndReason::Programmatic),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             mailbox,
@@ -5490,6 +5511,43 @@ mod handlers {
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        let session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let session_end_request = codex_hooks::SessionEndRequest {
+            session_id: sess.conversation_id,
+            cwd: session_configuration.cwd.to_path_buf(),
+            transcript_path: sess.hook_transcript_path().await,
+            model: session_configuration.collaboration_mode.model().to_string(),
+            permission_mode: match session_configuration.approval_policy.value() {
+                codex_protocol::protocol::AskForApproval::Never => "bypassPermissions",
+                codex_protocol::protocol::AskForApproval::UnlessTrusted
+                | codex_protocol::protocol::AskForApproval::OnFailure
+                | codex_protocol::protocol::AskForApproval::OnRequest
+                | codex_protocol::protocol::AskForApproval::Granular(_) => "default",
+            }
+            .to_string(),
+            reason: sess.take_pending_session_end_reason().await,
+        };
+        for run in sess.hooks().preview_session_end(&session_end_request) {
+            sess.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
+                    turn_id: None,
+                    run,
+                }),
+            })
+            .await;
+        }
+        let session_end_outcome = sess.hooks().run_session_end(session_end_request).await;
+        for completed in session_end_outcome.hook_events {
+            sess.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::HookCompleted(completed),
+            })
+            .await;
+        }
         let _ = sess.conversation.shutdown().await;
         sess.services
             .unified_exec_manager
@@ -6139,21 +6197,20 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
-                    let stop_hook_permission_mode = match turn_context.approval_policy.value() {
-                        AskForApproval::Never => "bypassPermissions",
-                        AskForApproval::UnlessTrusted
-                        | AskForApproval::OnFailure
-                        | AskForApproval::OnRequest
-                        | AskForApproval::Granular(_) => "default",
-                    }
-                    .to_string();
                     let stop_request = codex_hooks::StopRequest {
                         session_id: sess.conversation_id,
                         turn_id: turn_context.sub_id.clone(),
                         cwd: turn_context.cwd.to_path_buf(),
                         transcript_path: sess.hook_transcript_path().await,
                         model: turn_context.model_info.slug.clone(),
-                        permission_mode: stop_hook_permission_mode,
+                        permission_mode: match turn_context.approval_policy.value() {
+                            AskForApproval::Never => "bypassPermissions",
+                            AskForApproval::UnlessTrusted
+                            | AskForApproval::OnFailure
+                            | AskForApproval::OnRequest
+                            | AskForApproval::Granular(_) => "default",
+                        }
+                        .to_string(),
                         stop_hook_active,
                         last_assistant_message: last_agent_message.clone(),
                     };

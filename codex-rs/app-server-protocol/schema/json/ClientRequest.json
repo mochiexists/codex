@@ -2371,6 +2371,14 @@
       ],
       "type": "string"
     },
+    "SessionEndReason": {
+      "enum": [
+        "user_requested",
+        "session_switch",
+        "programmatic"
+      ],
+      "type": "string"
+    },
     "Settings": {
       "description": "Settings for a collaboration mode.",
       "properties": {
@@ -3119,6 +3127,17 @@
     },
     "ThreadUnsubscribeParams": {
       "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SessionEndReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "threadId": {
           "type": "string"
         }

@@ -57,6 +57,7 @@ use codex_features::FeatureOverrides;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_hooks::LaunchHook;
 use codex_login::AuthCredentialsStoreMode;
 use codex_mcp::mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -320,6 +321,9 @@ pub struct Config {
     ///
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
+
+    /// Launch-scoped hooks injected by the interactive CLI for this process only.
+    pub launch_hooks: Vec<LaunchHook>,
 
     /// TUI notifications preference. When set, the TUI will send terminal notifications on
     /// approvals and turn completions when not focused.
@@ -1888,6 +1892,8 @@ pub struct ConfigOverrides {
     pub ephemeral: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
+    /// Launch-scoped hooks injected by the CLI for this process only.
+    pub launch_hooks: Vec<LaunchHook>,
 }
 
 fn validate_reserved_model_provider_ids(
@@ -2098,6 +2104,7 @@ impl Config {
             tools_web_search_request: override_tools_web_search_request,
             ephemeral,
             additional_writable_roots,
+            launch_hooks,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -2642,6 +2649,7 @@ impl Config {
             approvals_reviewer,
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
+            launch_hooks,
             user_instructions,
             base_instructions,
             personality,

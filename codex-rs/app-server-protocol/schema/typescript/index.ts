@@ -61,6 +61,7 @@ export type { ReviewDecision } from "./ReviewDecision";
 export type { ServerNotification } from "./ServerNotification";
 export type { ServerRequest } from "./ServerRequest";
 export type { ServiceTier } from "./ServiceTier";
+export type { SessionEndReason } from "./SessionEndReason";
 export type { SessionSource } from "./SessionSource";
 export type { Settings } from "./Settings";
 export type { SubAgentSource } from "./SubAgentSource";

@@ -1,5 +1,6 @@
 use clap::Parser;
 use clap::ValueHint;
+use codex_hooks::LaunchHook;
 use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
@@ -107,6 +108,13 @@ pub struct Cli {
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
 
+    /// Register a launch-scoped hook handler without mutating persistent config.
+    ///
+    /// Repeat to add multiple hooks, for example:
+    /// `--hook session_start='echo started' --hook user_prompt_submit='echo running' --hook stop='echo stopped'`
+    #[arg(long = "hook", value_name = "EVENT=COMMAND")]
+    pub hooks: Vec<LaunchHook>,
+
     /// Disable alternate screen mode
     ///
     /// Runs the TUI in inline mode, preserving terminal scrollback history. This is useful
@@ -117,4 +125,51 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+    use codex_hooks::LaunchHook;
+    use codex_protocol::protocol::HookEventName;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parses_repeated_hook_flags() {
+        let cli = Cli::try_parse_from([
+            "codex",
+            "--hook",
+            "session_start=echo started",
+            "--hook",
+            "user_prompt_submit=echo running",
+            "--hook",
+            "session_end=echo ended",
+            "--hook",
+            "stop=echo stopped",
+        ])
+        .expect("cli should parse repeated hooks");
+
+        assert_eq!(
+            cli.hooks,
+            vec![
+                LaunchHook {
+                    event_name: HookEventName::SessionStart,
+                    command: "echo started".to_string(),
+                },
+                LaunchHook {
+                    event_name: HookEventName::UserPromptSubmit,
+                    command: "echo running".to_string(),
+                },
+                LaunchHook {
+                    event_name: HookEventName::SessionEnd,
+                    command: "echo ended".to_string(),
+                },
+                LaunchHook {
+                    event_name: HookEventName::Stop,
+                    command: "echo stopped".to_string(),
+                },
+            ]
+        );
+    }
 }

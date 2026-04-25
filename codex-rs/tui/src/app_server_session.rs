@@ -81,6 +81,7 @@ use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionEndReason;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
@@ -510,7 +511,11 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn thread_unsubscribe(&mut self, thread_id: ThreadId) -> Result<()> {
+    pub(crate) async fn thread_unsubscribe(
+        &mut self,
+        thread_id: ThreadId,
+        reason: SessionEndReason,
+    ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadUnsubscribeResponse = self
             .client
@@ -518,6 +523,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadUnsubscribeParams {
                     thread_id: thread_id.to_string(),
+                    reason: Some(reason),
                 },
             })
             .await

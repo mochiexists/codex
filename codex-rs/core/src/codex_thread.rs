@@ -17,6 +17,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionEndReason;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::TokenUsage;
@@ -71,7 +72,12 @@ impl CodexThread {
     }
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
-        self.codex.shutdown_and_wait().await
+        self.shutdown_and_wait_with_reason(SessionEndReason::Programmatic)
+            .await
+    }
+
+    pub async fn shutdown_and_wait_with_reason(&self, reason: SessionEndReason) -> CodexResult<()> {
+        self.codex.shutdown_and_wait_with_reason(reason).await
     }
 
     #[doc(hidden)]

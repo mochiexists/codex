@@ -334,9 +334,10 @@ When `nextCursor` is `null`, you’ve reached the final page.
 - `notLoaded` when the thread is not loaded.
 
 If this was the last subscriber, the server unloads the thread and emits `thread/closed` and a `thread/status/changed` transition to `notLoaded`.
+Clients may include an optional `reason` (`user_requested`, `session_switch`, or `programmatic`) so shutdown hooks can distinguish why the session ended. If omitted, the server treats it as `programmatic`.
 
 ```json
-{ "method": "thread/unsubscribe", "id": 22, "params": { "threadId": "thr_123" } }
+{ "method": "thread/unsubscribe", "id": 22, "params": { "threadId": "thr_123", "reason": "session_switch" } }
 { "id": 22, "result": { "status": "unsubscribed" } }
 { "method": "thread/status/changed", "params": {
     "threadId": "thr_123",

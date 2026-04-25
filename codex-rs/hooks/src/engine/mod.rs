@@ -14,12 +14,15 @@ use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
 use crate::events::pre_tool_use::PreToolUseOutcome;
 use crate::events::pre_tool_use::PreToolUseRequest;
+use crate::events::session_end::SessionEndOutcome;
+use crate::events::session_end::SessionEndRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
+use crate::registry::LaunchHook;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandShell {
@@ -53,6 +56,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PreToolUse => "pre-tool-use",
             codex_protocol::protocol::HookEventName::PostToolUse => "post-tool-use",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::SessionEnd => "session-end",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::Stop => "stop",
         }
@@ -70,6 +74,7 @@ impl ClaudeHooksEngine {
     pub(crate) fn new(
         enabled: bool,
         config_layer_stack: Option<&ConfigLayerStack>,
+        launch_hooks: &[LaunchHook],
         shell: CommandShell,
     ) -> Self {
         if !enabled {
@@ -92,7 +97,7 @@ impl ClaudeHooksEngine {
         }
 
         let _ = schema_loader::generated_hook_schemas();
-        let discovered = discovery::discover_handlers(config_layer_stack);
+        let discovered = discovery::discover_handlers(config_layer_stack, launch_hooks);
         Self {
             handlers: discovered.handlers,
             warnings: discovered.warnings,
@@ -128,6 +133,14 @@ impl ClaudeHooksEngine {
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         crate::events::session_start::run(&self.handlers, &self.shell, request, turn_id).await
+    }
+
+    pub(crate) fn preview_session_end(&self, request: &SessionEndRequest) -> Vec<HookRunSummary> {
+        crate::events::session_end::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_session_end(&self, request: SessionEndRequest) -> SessionEndOutcome {
+        crate::events::session_end::run(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {

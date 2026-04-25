@@ -1155,6 +1155,7 @@ async fn run_debug_prompt_input_command(
         show_raw_agent_reasoning: interactive.oss.then_some(true),
         ephemeral: Some(true),
         additional_writable_roots: interactive.add_dir,
+        launch_hooks: interactive.hooks,
         ..Default::default()
     };
     let config =
@@ -1448,6 +1449,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if !subcommand_cli.add_dir.is_empty() {
         interactive.add_dir.extend(subcommand_cli.add_dir);
+    }
+    if !subcommand_cli.hooks.is_empty() {
+        interactive.hooks.extend(subcommand_cli.hooks);
     }
     if let Some(prompt) = subcommand_cli.prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.

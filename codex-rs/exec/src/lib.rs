@@ -354,6 +354,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         tools_web_search_request: None,
         ephemeral: ephemeral.then_some(true),
         additional_writable_roots: add_dir,
+        launch_hooks: Vec::new(),
     };
 
     let config = ConfigBuilder::default()
@@ -1269,6 +1270,7 @@ async fn request_shutdown(
         request_id: request_ids.next(),
         params: ThreadUnsubscribeParams {
             thread_id: thread_id.to_string(),
+            reason: None,
         },
     };
     send_request_with_response::<ThreadUnsubscribeResponse>(client, request, "thread/unsubscribe")

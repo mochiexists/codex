@@ -8292,6 +8292,7 @@
           "preToolUse",
           "postToolUse",
           "sessionStart",
+          "sessionEnd",
           "userPromptSubmit",
           "stop"
         ],
@@ -11572,6 +11573,14 @@
         ],
         "type": "string"
       },
+      "SessionEndReason": {
+        "enum": [
+          "user_requested",
+          "session_switch",
+          "programmatic"
+        ],
+        "type": "string"
+      },
       "SessionSource": {
         "oneOf": [
           {
@@ -14207,6 +14216,17 @@
       "ThreadUnsubscribeParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SessionEndReason"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "threadId": {
             "type": "string"
           }

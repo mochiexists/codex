@@ -510,6 +510,15 @@ pub enum Op {
     ListModels,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionEndReason {
+    UserRequested,
+    SessionSwitch,
+    #[default]
+    Programmatic,
+}
+
 impl From<Vec<UserInput>> for Op {
     fn from(value: Vec<UserInput>) -> Self {
         Op::UserInput {
@@ -1426,6 +1435,7 @@ pub enum HookEventName {
     PreToolUse,
     PostToolUse,
     SessionStart,
+    SessionEnd,
     UserPromptSubmit,
     Stop,
 }

@@ -378,7 +378,7 @@ When `nextCursor` is `null`, you’ve reached the final page.
 
 ### Example: Unsubscribe from a loaded thread
 
-`thread/unsubscribe` removes the current connection's subscription to a thread. The response status is one of:
+`thread/unsubscribe` removes the current connection's subscription to a thread. A client may pass `clientDetachReason` (`userRequested`, `threadSwitch`, or `programmatic`) so `ClientDetach` hooks can distinguish explicit exits from thread switches. The response status is one of:
 
 - `unsubscribed` when the connection was subscribed and is now removed.
 - `notSubscribed` when the connection was not subscribed to that thread.
@@ -387,7 +387,7 @@ When `nextCursor` is `null`, you’ve reached the final page.
 If this was the last subscriber, the server does not unload the thread immediately. It unloads the thread after the thread has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed` and a `thread/status/changed` transition to `notLoaded`.
 
 ```json
-{ "method": "thread/unsubscribe", "id": 22, "params": { "threadId": "thr_123" } }
+{ "method": "thread/unsubscribe", "id": 22, "params": { "threadId": "thr_123", "clientDetachReason": "userRequested" } }
 { "id": 22, "result": { "status": "unsubscribed" } }
 ```
 

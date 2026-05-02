@@ -207,6 +207,12 @@
     },
     "ManagedHooksRequirements": {
       "properties": {
+        "ClientDetach": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "PermissionRequest": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -257,6 +263,7 @@
         }
       },
       "required": [
+        "ClientDetach",
         "PermissionRequest",
         "PostToolUse",
         "PreToolUse",

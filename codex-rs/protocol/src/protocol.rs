@@ -1517,8 +1517,17 @@ pub enum HookEventName {
     PermissionRequest,
     PostToolUse,
     SessionStart,
+    ClientDetach,
     UserPromptSubmit,
     Stop,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientDetachReason {
+    UserRequested,
+    ThreadSwitch,
+    Programmatic,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

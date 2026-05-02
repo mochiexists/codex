@@ -918,6 +918,14 @@
       ],
       "type": "string"
     },
+    "ClientDetachReason": {
+      "enum": [
+        "userRequested",
+        "threadSwitch",
+        "programmatic"
+      ],
+      "type": "string"
+    },
     "ClientInfo": {
       "properties": {
         "name": {
@@ -6349,6 +6357,7 @@
         "permissionRequest",
         "postToolUse",
         "sessionStart",
+        "clientDetach",
         "userPromptSubmit",
         "stop"
       ],
@@ -7197,6 +7206,12 @@
     },
     "ManagedHooksRequirements": {
       "properties": {
+        "ClientDetach": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "PermissionRequest": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -7247,6 +7262,7 @@
         }
       },
       "required": [
+        "ClientDetach",
         "PermissionRequest",
         "PostToolUse",
         "PreToolUse",
@@ -15157,6 +15173,16 @@
     "ThreadUnsubscribeParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "clientDetachReason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ClientDetachReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         }

@@ -306,6 +306,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         permission_request,
         post_tool_use,
         session_start,
+        client_detach,
         user_prompt_submit,
         stop,
     } = hooks;
@@ -317,6 +318,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         permission_request: map_hook_matcher_groups_to_api(permission_request),
         post_tool_use: map_hook_matcher_groups_to_api(post_tool_use),
         session_start: map_hook_matcher_groups_to_api(session_start),
+        client_detach: map_hook_matcher_groups_to_api(client_detach),
         user_prompt_submit: map_hook_matcher_groups_to_api(user_prompt_submit),
         stop: map_hook_matcher_groups_to_api(stop),
     }
@@ -625,6 +627,7 @@ mod tests {
                 permission_request: Vec::new(),
                 post_tool_use: Vec::new(),
                 session_start: Vec::new(),
+                client_detach: Vec::new(),
                 user_prompt_submit: Vec::new(),
                 stop: Vec::new(),
             }),

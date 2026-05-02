@@ -22,6 +22,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ClientDetachReason;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -126,6 +127,10 @@ impl CodexThread {
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
+    }
+
+    pub async fn run_client_detach_hooks(&self, reason: ClientDetachReason) {
+        self.codex.session.run_client_detach_hooks(reason).await;
     }
 
     /// Wait until the underlying session loop has terminated.

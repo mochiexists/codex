@@ -19,6 +19,7 @@ use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
+use codex_app_server_protocol::ClientDetachReason;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
@@ -732,7 +733,11 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn thread_unsubscribe(&mut self, thread_id: ThreadId) -> Result<()> {
+    pub(crate) async fn thread_unsubscribe(
+        &mut self,
+        thread_id: ThreadId,
+        client_detach_reason: ClientDetachReason,
+    ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadUnsubscribeResponse = self
             .client
@@ -740,6 +745,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadUnsubscribeParams {
                     thread_id: thread_id.to_string(),
+                    client_detach_reason: Some(client_detach_reason),
                 },
             })
             .await

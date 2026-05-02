@@ -442,11 +442,21 @@ impl App {
             self.chat_widget.thread_name(),
             self.chat_widget.rollout_path().as_deref(),
         );
-        self.shutdown_current_thread(app_server).await;
+        self.shutdown_current_thread(
+            app_server,
+            codex_app_server_protocol::ClientDetachReason::ThreadSwitch,
+        )
+        .await;
         let tracked_thread_ids: Vec<ThreadId> =
             self.thread_event_channels.keys().copied().collect();
         for thread_id in tracked_thread_ids {
-            if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+            if let Err(err) = app_server
+                .thread_unsubscribe(
+                    thread_id,
+                    codex_app_server_protocol::ClientDetachReason::ThreadSwitch,
+                )
+                .await
+            {
                 tracing::warn!("failed to unsubscribe tracked thread {thread_id}: {err}");
             }
         }
@@ -680,7 +690,11 @@ impl App {
             .await
         {
             Ok(resumed) => {
-                self.shutdown_current_thread(app_server).await;
+                self.shutdown_current_thread(
+                    app_server,
+                    codex_app_server_protocol::ClientDetachReason::ThreadSwitch,
+                )
+                .await;
                 self.config = resume_config;
                 tui.set_notification_settings(
                     self.config.tui_notifications.method,

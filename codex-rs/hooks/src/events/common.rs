@@ -104,7 +104,7 @@ pub(crate) fn matcher_pattern_for_event(
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
         | HookEventName::SessionStart => matcher,
-        HookEventName::UserPromptSubmit | HookEventName::Stop => None,
+        HookEventName::ClientDetach | HookEventName::UserPromptSubmit | HookEventName::Stop => None,
     }
 }
 

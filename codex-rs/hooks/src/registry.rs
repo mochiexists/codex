@@ -5,6 +5,8 @@ use tokio::process::Command;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
 use crate::engine::HookListEntry;
+use crate::events::client_detach::ClientDetachOutcome;
+use crate::events::client_detach::ClientDetachRequest;
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -137,6 +139,17 @@ impl Hooks {
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         self.engine.run_session_start(request, turn_id).await
+    }
+
+    pub fn preview_client_detach(
+        &self,
+        request: &ClientDetachRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_client_detach(request)
+    }
+
+    pub async fn run_client_detach(&self, request: ClientDetachRequest) -> ClientDetachOutcome {
+        self.engine.run_client_detach(request).await
     }
 
     pub async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {

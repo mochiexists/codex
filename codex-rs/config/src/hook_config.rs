@@ -37,6 +37,8 @@ pub struct HookEventsToml {
     pub post_tool_use: Vec<MatcherGroup>,
     #[serde(rename = "SessionStart", default)]
     pub session_start: Vec<MatcherGroup>,
+    #[serde(rename = "ClientDetach", default)]
+    pub client_detach: Vec<MatcherGroup>,
     #[serde(rename = "UserPromptSubmit", default)]
     pub user_prompt_submit: Vec<MatcherGroup>,
     #[serde(rename = "Stop", default)]
@@ -50,6 +52,7 @@ impl HookEventsToml {
             permission_request,
             post_tool_use,
             session_start,
+            client_detach,
             user_prompt_submit,
             stop,
         } = self;
@@ -57,6 +60,7 @@ impl HookEventsToml {
             && permission_request.is_empty()
             && post_tool_use.is_empty()
             && session_start.is_empty()
+            && client_detach.is_empty()
             && user_prompt_submit.is_empty()
             && stop.is_empty()
     }
@@ -67,6 +71,7 @@ impl HookEventsToml {
             permission_request,
             post_tool_use,
             session_start,
+            client_detach,
             user_prompt_submit,
             stop,
         } = self;
@@ -75,6 +80,7 @@ impl HookEventsToml {
             permission_request,
             post_tool_use,
             session_start,
+            client_detach,
             user_prompt_submit,
             stop,
         ]
@@ -84,12 +90,13 @@ impl HookEventsToml {
         .sum()
     }
 
-    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 6] {
+    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 7] {
         [
             (HookEventName::PreToolUse, self.pre_tool_use),
             (HookEventName::PermissionRequest, self.permission_request),
             (HookEventName::PostToolUse, self.post_tool_use),
             (HookEventName::SessionStart, self.session_start),
+            (HookEventName::ClientDetach, self.client_detach),
             (HookEventName::UserPromptSubmit, self.user_prompt_submit),
             (HookEventName::Stop, self.stop),
         ]

@@ -134,6 +134,14 @@
       ],
       "type": "object"
     },
+    "ClientDetachReason": {
+      "enum": [
+        "userRequested",
+        "threadSwitch",
+        "programmatic"
+      ],
+      "type": "string"
+    },
     "ClientInfo": {
       "properties": {
         "name": {
@@ -4145,6 +4153,16 @@
     },
     "ThreadUnsubscribeParams": {
       "properties": {
+        "clientDetachReason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ClientDetachReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         }

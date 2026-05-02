@@ -8,11 +8,12 @@ mod types;
 
 pub use engine::HookListEntry;
 /// Hook event names as they appear in hooks JSON and config files.
-pub const HOOK_EVENT_NAMES: [&str; 6] = [
+pub const HOOK_EVENT_NAMES: [&str; 7] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
     "SessionStart",
+    "ClientDetach",
     "UserPromptSubmit",
     "Stop",
 ];
@@ -28,6 +29,8 @@ pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 4] = [
     "PostToolUse",
     "SessionStart",
 ];
+pub use events::client_detach::ClientDetachOutcome;
+pub use events::client_detach::ClientDetachRequest;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;

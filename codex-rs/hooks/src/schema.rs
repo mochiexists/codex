@@ -21,6 +21,8 @@ const PRE_TOOL_USE_INPUT_FIXTURE: &str = "pre-tool-use.command.input.schema.json
 const PRE_TOOL_USE_OUTPUT_FIXTURE: &str = "pre-tool-use.command.output.schema.json";
 const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.json";
 const SESSION_START_OUTPUT_FIXTURE: &str = "session-start.command.output.schema.json";
+const CLIENT_DETACH_INPUT_FIXTURE: &str = "client-detach.command.input.schema.json";
+const CLIENT_DETACH_OUTPUT_FIXTURE: &str = "client-detach.command.output.schema.json";
 const USER_PROMPT_SUBMIT_INPUT_FIXTURE: &str = "user-prompt-submit.command.input.schema.json";
 const USER_PROMPT_SUBMIT_OUTPUT_FIXTURE: &str = "user-prompt-submit.command.output.schema.json";
 const STOP_INPUT_FIXTURE: &str = "stop.command.input.schema.json";
@@ -77,6 +79,8 @@ pub(crate) enum HookEventNameWire {
     PostToolUse,
     #[serde(rename = "SessionStart")]
     SessionStart,
+    #[serde(rename = "ClientDetach")]
+    ClientDetach,
     #[serde(rename = "UserPromptSubmit")]
     UserPromptSubmit,
     #[serde(rename = "Stop")]
@@ -281,6 +285,15 @@ pub(crate) struct SessionStartCommandOutputWire {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "client-detach.command.output")]
+pub(crate) struct ClientDetachCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SessionStartHookSpecificOutputWire {
     pub hook_event_name: HookEventNameWire,
     #[serde(default)]
@@ -371,6 +384,43 @@ impl SessionStartCommandInput {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "client-detach.command.input")]
+pub(crate) struct ClientDetachCommandInput {
+    pub session_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "client_detach_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    #[schemars(schema_with = "client_detach_reason_schema")]
+    pub reason: String,
+}
+
+impl ClientDetachCommandInput {
+    pub(crate) fn new(
+        session_id: impl Into<String>,
+        transcript_path: Option<PathBuf>,
+        cwd: impl Into<String>,
+        model: impl Into<String>,
+        permission_mode: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            transcript_path: NullableString::from_path(transcript_path),
+            cwd: cwd.into(),
+            hook_event_name: "ClientDetach".to_string(),
+            model: model.into(),
+            permission_mode: permission_mode.into(),
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "user-prompt-submit.command.input")]
 pub(crate) struct UserPromptSubmitCommandInput {
     pub session_id: String,
@@ -439,6 +489,14 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     write_schema(
         &generated_dir.join(SESSION_START_OUTPUT_FIXTURE),
         schema_json::<SessionStartCommandOutputWire>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(CLIENT_DETACH_INPUT_FIXTURE),
+        schema_json::<ClientDetachCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(CLIENT_DETACH_OUTPUT_FIXTURE),
+        schema_json::<ClientDetachCommandOutputWire>()?,
     )?;
     write_schema(
         &generated_dir.join(USER_PROMPT_SUBMIT_INPUT_FIXTURE),
@@ -515,6 +573,10 @@ fn session_start_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("SessionStart")
 }
 
+fn client_detach_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("ClientDetach")
+}
+
 fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostToolUse")
 }
@@ -547,6 +609,10 @@ fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn session_start_source_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_enum_schema(&["startup", "resume", "clear"])
+}
+
+fn client_detach_reason_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["user_requested", "thread_switch", "programmatic"])
 }
 
 fn string_const_schema(value: &str) -> Schema {

@@ -134,7 +134,11 @@ impl App {
                         .await;
                     match app_server.fork_thread(self.config.clone(), thread_id).await {
                         Ok(forked) => {
-                            self.shutdown_current_thread(app_server).await;
+                            self.shutdown_current_thread(
+                                app_server,
+                                codex_app_server_protocol::ClientDetachReason::ThreadSwitch,
+                            )
+                            .await;
                             match self
                                 .replace_chat_widget_with_app_server_thread(
                                     tui, app_server, forked, /*initial_user_message*/ None,
@@ -2074,7 +2078,10 @@ impl App {
                     // is already wedged.
                     if tokio::time::timeout(
                         SHUTDOWN_FIRST_EXIT_TIMEOUT,
-                        self.shutdown_current_thread(app_server),
+                        self.shutdown_current_thread(
+                            app_server,
+                            codex_app_server_protocol::ClientDetachReason::UserRequested,
+                        ),
                     )
                     .await
                     .is_err()

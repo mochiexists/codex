@@ -1455,6 +1455,7 @@ async fn request_shutdown(
         request_id: request_ids.next(),
         params: ThreadUnsubscribeParams {
             thread_id: thread_id.to_string(),
+            client_detach_reason: None,
         },
     };
     send_request_with_response::<ThreadUnsubscribeResponse>(client, request, "thread/unsubscribe")

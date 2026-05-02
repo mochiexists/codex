@@ -13,6 +13,11 @@ pub(crate) struct SessionStartOutput {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct ClientDetachOutput {
+    pub universal: UniversalOutput,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct PreToolUseOutput {
     pub universal: UniversalOutput,
     pub block_reason: Option<String>,
@@ -60,6 +65,7 @@ pub(crate) struct StopOutput {
 }
 
 use crate::schema::BlockDecisionWire;
+use crate::schema::ClientDetachCommandOutputWire;
 use crate::schema::HookUniversalOutputWire;
 use crate::schema::PermissionRequestBehaviorWire;
 use crate::schema::PermissionRequestCommandOutputWire;
@@ -80,6 +86,13 @@ pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     Some(SessionStartOutput {
         universal: UniversalOutput::from(wire.universal),
         additional_context,
+    })
+}
+
+pub(crate) fn parse_client_detach(stdout: &str) -> Option<ClientDetachOutput> {
+    let wire: ClientDetachCommandOutputWire = parse_json(stdout)?;
+    Some(ClientDetachOutput {
+        universal: UniversalOutput::from(wire.universal),
     })
 }
 

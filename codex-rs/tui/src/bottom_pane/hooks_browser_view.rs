@@ -537,6 +537,7 @@ fn event_label(event_name: HookEventName) -> &'static str {
         HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
         HookEventName::SessionStart => "SessionStart",
+        HookEventName::ClientDetach => "ClientDetach",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
     }
@@ -548,6 +549,7 @@ fn event_description(event_name: HookEventName) -> &'static str {
         HookEventName::PermissionRequest => "When permission is requested",
         HookEventName::PostToolUse => "After a tool executes",
         HookEventName::SessionStart => "When a new session starts",
+        HookEventName::ClientDetach => "When a client leaves a thread",
         HookEventName::UserPromptSubmit => "When the user submits a prompt",
         HookEventName::Stop => "Right before Codex ends its turn",
     }

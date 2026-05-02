@@ -14,6 +14,8 @@ use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::events::client_detach::ClientDetachOutcome;
+use crate::events::client_detach::ClientDetachRequest;
 use crate::events::permission_request::PermissionRequestOutcome;
 use crate::events::permission_request::PermissionRequestRequest;
 use crate::events::post_tool_use::PostToolUseOutcome;
@@ -62,6 +64,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PermissionRequest => "permission-request",
             codex_protocol::protocol::HookEventName::PostToolUse => "post-tool-use",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::ClientDetach => "client-detach",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::Stop => "stop",
         }
@@ -156,6 +159,20 @@ impl ClaudeHooksEngine {
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         crate::events::session_start::run(&self.handlers, &self.shell, request, turn_id).await
+    }
+
+    pub(crate) fn preview_client_detach(
+        &self,
+        request: &ClientDetachRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::client_detach::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_client_detach(
+        &self,
+        request: ClientDetachRequest,
+    ) -> ClientDetachOutcome {
+        crate::events::client_detach::run(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {

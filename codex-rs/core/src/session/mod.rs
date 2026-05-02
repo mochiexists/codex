@@ -320,6 +320,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ClientDetachReason;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::DeprecationNoticeEvent;
@@ -327,6 +328,8 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::HookCompletedEvent;
+use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::ModelRerouteEvent;
@@ -3213,6 +3216,54 @@ impl Session {
 
     pub(crate) fn hooks(&self) -> Arc<Hooks> {
         self.services.hooks.load_full()
+    }
+
+    pub(crate) async fn run_client_detach_hooks(&self, reason: ClientDetachReason) {
+        let (cwd, model, permission_mode) = {
+            let state = self.state.lock().await;
+            let session_configuration = &state.session_configuration;
+            let permission_mode = match session_configuration.approval_policy.value() {
+                AskForApproval::Never => "bypassPermissions",
+                AskForApproval::UnlessTrusted
+                | AskForApproval::OnFailure
+                | AskForApproval::OnRequest
+                | AskForApproval::Granular(_) => "default",
+            }
+            .to_string();
+            (
+                session_configuration.cwd.clone(),
+                session_configuration.collaboration_mode.model().to_string(),
+                permission_mode,
+            )
+        };
+        let request = codex_hooks::ClientDetachRequest {
+            session_id: self.conversation_id,
+            cwd,
+            transcript_path: self.hook_transcript_path().await,
+            model,
+            permission_mode,
+            reason,
+        };
+        let hooks = self.hooks();
+        for run in hooks.preview_client_detach(&request) {
+            self.send_event_raw(Event {
+                id: "client-detach".to_string(),
+                msg: EventMsg::HookStarted(HookStartedEvent { turn_id: None, run }),
+            })
+            .await;
+        }
+        let outcome = hooks.run_client_detach(request).await;
+        for completed in outcome.hook_events {
+            self.send_client_detach_hook_completed(completed).await;
+        }
+    }
+
+    async fn send_client_detach_hook_completed(&self, completed: HookCompletedEvent) {
+        self.send_event_raw(Event {
+            id: "client-detach".to_string(),
+            msg: EventMsg::HookCompleted(completed),
+        })
+        .await;
     }
 
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {

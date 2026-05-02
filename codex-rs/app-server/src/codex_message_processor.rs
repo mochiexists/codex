@@ -6070,14 +6070,17 @@ impl CodexMessageProcessor {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        if self.thread_manager.get_thread(thread_id).await.is_err() {
-            // Reconcile stale app-server bookkeeping when the thread has already been
-            // removed from the core manager. This keeps loaded-status/subscription state
-            // consistent with the source of truth before reporting NotLoaded.
-            self.finalize_thread_teardown(thread_id).await;
-            return Ok(ThreadUnsubscribeResponse {
-                status: ThreadUnsubscribeStatus::NotLoaded,
-            });
+        let thread = match self.thread_manager.get_thread(thread_id).await {
+            Ok(thread) => thread,
+            Err(_) => {
+                // Reconcile stale app-server bookkeeping when the thread has already been
+                // removed from the core manager. This keeps loaded-status/subscription state
+                // consistent with the source of truth before reporting NotLoaded.
+                self.finalize_thread_teardown(thread_id).await;
+                return Ok(ThreadUnsubscribeResponse {
+                    status: ThreadUnsubscribeStatus::NotLoaded,
+                });
+            }
         };
 
         let was_subscribed = self
@@ -6086,6 +6089,14 @@ impl CodexMessageProcessor {
             .await;
 
         let status = if was_subscribed {
+            thread
+                .run_client_detach_hooks(
+                    params
+                        .client_detach_reason
+                        .map(|reason| reason.to_core())
+                        .unwrap_or(codex_protocol::protocol::ClientDetachReason::Programmatic),
+                )
+                .await;
             ThreadUnsubscribeStatus::Unsubscribed
         } else {
             ThreadUnsubscribeStatus::NotSubscribed

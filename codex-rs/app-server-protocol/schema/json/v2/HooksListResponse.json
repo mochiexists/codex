@@ -26,6 +26,7 @@
         "permissionRequest",
         "postToolUse",
         "sessionStart",
+        "clientDetach",
         "userPromptSubmit",
         "stop"
       ],

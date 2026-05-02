@@ -6274,6 +6274,14 @@
         ],
         "type": "string"
       },
+      "ClientDetachReason": {
+        "enum": [
+          "userRequested",
+          "threadSwitch",
+          "programmatic"
+        ],
+        "type": "string"
+      },
       "CodexErrorInfo": {
         "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
         "oneOf": [
@@ -9740,6 +9748,7 @@
           "permissionRequest",
           "postToolUse",
           "sessionStart",
+          "clientDetach",
           "userPromptSubmit",
           "stop"
         ],
@@ -10544,6 +10553,12 @@
       },
       "ManagedHooksRequirements": {
         "properties": {
+          "ClientDetach": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
           "PermissionRequest": {
             "items": {
               "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
@@ -10594,6 +10609,7 @@
           }
         },
         "required": [
+          "ClientDetach",
           "PermissionRequest",
           "PostToolUse",
           "PreToolUse",
@@ -17271,6 +17287,16 @@
       "ThreadUnsubscribeParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "clientDetachReason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ClientDetachReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "threadId": {
             "type": "string"
           }

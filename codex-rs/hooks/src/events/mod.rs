@@ -1,3 +1,4 @@
+pub mod client_detach;
 pub(crate) mod common;
 pub mod permission_request;
 pub mod post_tool_use;

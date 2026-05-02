@@ -712,6 +712,7 @@ fn hook_event_label(event_name: HookEventName) -> &'static str {
         HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
         HookEventName::SessionStart => "SessionStart",
+        HookEventName::ClientDetach => "ClientDetach",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::Stop => "Stop",
     }

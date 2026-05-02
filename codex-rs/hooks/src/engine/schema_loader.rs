@@ -12,6 +12,8 @@ pub(crate) struct GeneratedHookSchemas {
     pub pre_tool_use_command_output: Value,
     pub session_start_command_input: Value,
     pub session_start_command_output: Value,
+    pub client_detach_command_input: Value,
+    pub client_detach_command_output: Value,
     pub user_prompt_submit_command_input: Value,
     pub user_prompt_submit_command_output: Value,
     pub stop_command_input: Value,
@@ -52,6 +54,14 @@ pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
         session_start_command_output: parse_json_schema(
             "session-start.command.output",
             include_str!("../../schema/generated/session-start.command.output.schema.json"),
+        ),
+        client_detach_command_input: parse_json_schema(
+            "client-detach.command.input",
+            include_str!("../../schema/generated/client-detach.command.input.schema.json"),
+        ),
+        client_detach_command_output: parse_json_schema(
+            "client-detach.command.output",
+            include_str!("../../schema/generated/client-detach.command.output.schema.json"),
         ),
         user_prompt_submit_command_input: parse_json_schema(
             "user-prompt-submit.command.input",

@@ -62,6 +62,7 @@ use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
+use codex_protocol::protocol::ClientDetachReason as CoreClientDetachReason;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandSource as CoreExecCommandSource;
@@ -443,7 +444,13 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PermissionRequest, PostToolUse, SessionStart, UserPromptSubmit, Stop
+        PreToolUse, PermissionRequest, PostToolUse, SessionStart, ClientDetach, UserPromptSubmit, Stop
+    }
+);
+
+v2_enum_from_core!(
+    pub enum ClientDetachReason from CoreClientDetachReason {
+        UserRequested, ThreadSwitch, Programmatic
     }
 );
 
@@ -980,6 +987,9 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "SessionStart")]
     #[ts(rename = "SessionStart")]
     pub session_start: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "ClientDetach")]
+    #[ts(rename = "ClientDetach")]
+    pub client_detach: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "UserPromptSubmit")]
     #[ts(rename = "UserPromptSubmit")]
     pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,
@@ -3904,6 +3914,8 @@ pub struct ThreadArchiveResponse {}
 #[ts(export_to = "v2/")]
 pub struct ThreadUnsubscribeParams {
     pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub client_detach_reason: Option<ClientDetachReason>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

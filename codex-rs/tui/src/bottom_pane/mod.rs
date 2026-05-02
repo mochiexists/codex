@@ -28,6 +28,7 @@ use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
+use crate::slash_command::SlashCommandRunningState;
 use crate::tui::FrameRequester;
 pub(crate) use bottom_pane_view::BottomPaneView;
 use bottom_pane_view::ViewCompletion;
@@ -993,6 +994,10 @@ impl BottomPane {
         self.composer
             .set_context_window(percent, self.context_window_used_tokens);
         self.request_redraw();
+    }
+
+    pub fn set_slash_command_running_state(&mut self, state: SlashCommandRunningState) {
+        self.composer.set_slash_command_running_state(state);
     }
 
     /// Show a generic list selection view with the provided items.

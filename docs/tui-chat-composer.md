@@ -98,6 +98,10 @@ Key effects when disabled:
 Built-in slash command availability is centralized in
 `codex-rs/tui/src/bottom_pane/slash_commands.rs` and reused by both the composer and the command
 popup so gating stays in sync.
+The parent `ChatWidget` supplies a more specific running-state classification than the composer can
+derive from its single task-running flag: idle, MCP startup, or active agent turn. This lets commands
+such as `/resume` remain available during MCP startup while still being rejected during an active
+agent turn.
 
 ## Submission flow (Enter/Tab)
 

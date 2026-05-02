@@ -310,6 +310,7 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
+use crate::slash_command::SlashCommandRunningState;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
@@ -1684,10 +1685,23 @@ impl ChatWidget {
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
     /// both the agent turn lifecycle and MCP startup lifecycle.
     fn update_task_running_state(&mut self) {
+        let slash_command_running_state = self.slash_command_running_state();
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.bottom_pane
+            .set_slash_command_running_state(slash_command_running_state);
         self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
+    }
+
+    pub(crate) fn slash_command_running_state(&self) -> SlashCommandRunningState {
+        if self.agent_turn_running {
+            SlashCommandRunningState::AgentTurn
+        } else if self.mcp_startup_status.is_some() {
+            SlashCommandRunningState::McpStartup
+        } else {
+            SlashCommandRunningState::Idle
+        }
     }
 
     fn restore_reasoning_status_header(&mut self) {

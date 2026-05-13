@@ -13,6 +13,11 @@ pub(crate) struct SessionStartOutput {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct ThreadUnsubscribeOutput {
+    pub universal: UniversalOutput,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct PreToolUseOutput {
     pub universal: UniversalOutput,
     pub block_reason: Option<String>,
@@ -86,6 +91,7 @@ use crate::schema::PreToolUseDecisionWire;
 use crate::schema::PreToolUsePermissionDecisionWire;
 use crate::schema::SessionStartCommandOutputWire;
 use crate::schema::StopCommandOutputWire;
+use crate::schema::ThreadUnsubscribeCommandOutputWire;
 use crate::schema::UserPromptSubmitCommandOutputWire;
 
 pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
@@ -96,6 +102,13 @@ pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     Some(SessionStartOutput {
         universal: UniversalOutput::from(wire.universal),
         additional_context,
+    })
+}
+
+pub(crate) fn parse_thread_unsubscribe(stdout: &str) -> Option<ThreadUnsubscribeOutput> {
+    let wire: ThreadUnsubscribeCommandOutputWire = parse_json(stdout)?;
+    Some(ThreadUnsubscribeOutput {
+        universal: UniversalOutput::from(wire.universal),
     })
 }
 

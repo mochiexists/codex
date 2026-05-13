@@ -43,6 +43,8 @@ pub struct HookEventsToml {
     pub post_compact: Vec<MatcherGroup>,
     #[serde(rename = "SessionStart", default)]
     pub session_start: Vec<MatcherGroup>,
+    #[serde(rename = "ThreadUnsubscribe", default)]
+    pub thread_unsubscribe: Vec<MatcherGroup>,
     #[serde(rename = "UserPromptSubmit", default)]
     pub user_prompt_submit: Vec<MatcherGroup>,
     #[serde(rename = "Stop", default)]
@@ -58,6 +60,7 @@ impl HookEventsToml {
             pre_compact,
             post_compact,
             session_start,
+            thread_unsubscribe,
             user_prompt_submit,
             stop,
         } = self;
@@ -67,6 +70,7 @@ impl HookEventsToml {
             && pre_compact.is_empty()
             && post_compact.is_empty()
             && session_start.is_empty()
+            && thread_unsubscribe.is_empty()
             && user_prompt_submit.is_empty()
             && stop.is_empty()
     }
@@ -79,6 +83,7 @@ impl HookEventsToml {
             pre_compact,
             post_compact,
             session_start,
+            thread_unsubscribe,
             user_prompt_submit,
             stop,
         } = self;
@@ -89,6 +94,7 @@ impl HookEventsToml {
             pre_compact,
             post_compact,
             session_start,
+            thread_unsubscribe,
             user_prompt_submit,
             stop,
         ]
@@ -98,7 +104,7 @@ impl HookEventsToml {
         .sum()
     }
 
-    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 8] {
+    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 9] {
         [
             (HookEventName::PreToolUse, self.pre_tool_use),
             (HookEventName::PermissionRequest, self.permission_request),
@@ -106,6 +112,7 @@ impl HookEventsToml {
             (HookEventName::PreCompact, self.pre_compact),
             (HookEventName::PostCompact, self.post_compact),
             (HookEventName::SessionStart, self.session_start),
+            (HookEventName::ThreadUnsubscribe, self.thread_unsubscribe),
             (HookEventName::UserPromptSubmit, self.user_prompt_submit),
             (HookEventName::Stop, self.stop),
         ]

@@ -454,6 +454,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         pre_compact,
         post_compact,
         session_start,
+        thread_unsubscribe,
         user_prompt_submit,
         stop,
     } = hooks;
@@ -467,6 +468,7 @@ fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> Managed
         pre_compact: map_hook_matcher_groups_to_api(pre_compact),
         post_compact: map_hook_matcher_groups_to_api(post_compact),
         session_start: map_hook_matcher_groups_to_api(session_start),
+        thread_unsubscribe: map_hook_matcher_groups_to_api(thread_unsubscribe),
         user_prompt_submit: map_hook_matcher_groups_to_api(user_prompt_submit),
         stop: map_hook_matcher_groups_to_api(stop),
     }

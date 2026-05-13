@@ -30,6 +30,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::ThreadUnsubscribeReason;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
@@ -152,6 +153,13 @@ impl CodexThread {
             .session
             .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
             .await
+    }
+
+    pub async fn run_thread_unsubscribe_hooks(&self, reason: ThreadUnsubscribeReason) {
+        self.codex
+            .session
+            .run_thread_unsubscribe_hooks(reason)
+            .await;
     }
 
     pub async fn prepare_external_goal_mutation(&self) {

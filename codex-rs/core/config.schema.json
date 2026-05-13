@@ -1094,6 +1094,13 @@
           },
           "type": "array"
         },
+        "ThreadUnsubscribe": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MatcherGroup"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "default": [],
           "items": {

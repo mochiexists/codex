@@ -6,13 +6,18 @@
 
 use super::*;
 use crate::session_resume::read_session_model;
+use codex_app_server_protocol::ThreadUnsubscribeReason;
 
 impl App {
-    pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
+    pub(super) async fn shutdown_current_thread(
+        &mut self,
+        app_server: &mut AppServerSession,
+        reason: ThreadUnsubscribeReason,
+    ) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
-            if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+            if let Err(err) = app_server.thread_unsubscribe(thread_id, reason).await {
                 tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
             }
             self.abort_thread_event_listener(thread_id);

@@ -4055,6 +4055,16 @@
     },
     "ThreadUnsubscribeParams": {
       "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadUnsubscribeReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         }
@@ -4063,6 +4073,14 @@
         "threadId"
       ],
       "type": "object"
+    },
+    "ThreadUnsubscribeReason": {
+      "enum": [
+        "userRequested",
+        "threadSwitch",
+        "programmatic"
+      ],
+      "type": "string"
     },
     "TurnEnvironmentParams": {
       "properties": {

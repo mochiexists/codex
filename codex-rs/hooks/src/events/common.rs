@@ -106,7 +106,9 @@ pub(crate) fn matcher_pattern_for_event(
         | HookEventName::SessionStart
         | HookEventName::PreCompact
         | HookEventName::PostCompact => matcher,
-        HookEventName::UserPromptSubmit | HookEventName::Stop => None,
+        HookEventName::ThreadUnsubscribe
+        | HookEventName::UserPromptSubmit
+        | HookEventName::Stop => None,
     }
 }
 

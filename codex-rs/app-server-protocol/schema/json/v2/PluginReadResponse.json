@@ -45,6 +45,7 @@
         "preCompact",
         "postCompact",
         "sessionStart",
+        "threadUnsubscribe",
         "userPromptSubmit",
         "stop"
       ],

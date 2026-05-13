@@ -16,6 +16,7 @@
         "PreCompact",
         "PostCompact",
         "SessionStart",
+        "ThreadUnsubscribe",
         "UserPromptSubmit",
         "Stop"
       ],

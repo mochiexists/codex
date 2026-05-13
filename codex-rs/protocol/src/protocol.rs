@@ -1457,8 +1457,17 @@ pub enum HookEventName {
     PreCompact,
     PostCompact,
     SessionStart,
+    ThreadUnsubscribe,
     UserPromptSubmit,
     Stop,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadUnsubscribeReason {
+    UserRequested,
+    ThreadSwitch,
+    Programmatic,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

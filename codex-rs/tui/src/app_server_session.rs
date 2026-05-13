@@ -95,6 +95,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
+use codex_app_server_protocol::ThreadUnsubscribeReason;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -757,7 +758,11 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn thread_unsubscribe(&mut self, thread_id: ThreadId) -> Result<()> {
+    pub(crate) async fn thread_unsubscribe(
+        &mut self,
+        thread_id: ThreadId,
+        reason: ThreadUnsubscribeReason,
+    ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadUnsubscribeResponse = self
             .client
@@ -765,6 +770,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadUnsubscribeParams {
                     thread_id: thread_id.to_string(),
+                    reason: Some(reason),
                 },
             })
             .await

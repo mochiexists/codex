@@ -4,6 +4,7 @@
 //! and final-message separator handling.
 
 use super::*;
+use crate::slash_command::SlashCommandRunningState;
 
 impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
@@ -11,11 +12,26 @@ impl ChatWidget {
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
     /// both the agent turn lifecycle and MCP startup lifecycle.
     pub(super) fn update_task_running_state(&mut self) {
+        let slash_command_running_state = self.slash_command_running_state();
         self.bottom_pane.set_task_running(
             self.turn_lifecycle.agent_turn_running || self.mcp_startup_status.is_some(),
         );
+        self.bottom_pane
+            .set_slash_command_running_state(slash_command_running_state);
         self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
+    }
+
+    pub(crate) fn slash_command_running_state(&self) -> SlashCommandRunningState {
+        if self.turn_lifecycle.agent_turn_running {
+            SlashCommandRunningState::AgentTurn
+        } else if self.mcp_startup_status.is_some() {
+            SlashCommandRunningState::McpStartup
+        } else if self.bottom_pane.is_task_running() {
+            SlashCommandRunningState::AgentTurn
+        } else {
+            SlashCommandRunningState::Idle
+        }
     }
 
     pub(super) fn collect_runtime_metrics_delta(&mut self) {

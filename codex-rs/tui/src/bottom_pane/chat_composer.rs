@@ -211,6 +211,7 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
+use crate::slash_command::SlashCommandRunningState;
 use crate::style::user_message_style;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::ByteRange;
@@ -355,6 +356,7 @@ pub(crate) struct ChatComposer {
     attachments: AttachmentState,
     placeholder_text: String,
     is_task_running: bool,
+    slash_command_running_state: SlashCommandRunningState,
     /// Slash-command draft staged for local recall after application-level dispatch.
     ///
     /// This slot is intentionally separate from `ChatComposerHistory` so inline slash commands can
@@ -524,6 +526,7 @@ impl ChatComposer {
             attachments: AttachmentState::default(),
             placeholder_text,
             is_task_running: false,
+            slash_command_running_state: SlashCommandRunningState::Idle,
             pending_slash_command_history: None,
             #[cfg(not(target_os = "linux"))]
             next_element_id: 0,
@@ -3045,7 +3048,7 @@ impl ChatComposer {
     }
 
     fn reject_slash_command_if_unavailable(&self, command: &SlashCommandItem) -> bool {
-        if !self.is_task_running || command.available_during_task() {
+        if command.available_in_running_state(self.slash_command_running_state) {
             return false;
         }
         let message = format!(
@@ -4132,6 +4135,15 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+        self.slash_command_running_state = if running {
+            SlashCommandRunningState::AgentTurn
+        } else {
+            SlashCommandRunningState::Idle
+        };
+    }
+
+    pub fn set_slash_command_running_state(&mut self, state: SlashCommandRunningState) {
+        self.slash_command_running_state = state;
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {

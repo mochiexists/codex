@@ -27,6 +27,17 @@ fn force_old_iterm2_pet_image_unsupported(chat: &mut ChatWidget) {
     ));
 }
 
+fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartupState) {
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: name.to_string(),
+            status,
+            error: None,
+        }),
+        /*replay_kind*/ None,
+    );
+}
+
 fn fast_tier_command() -> ServiceTierCommand {
     ServiceTierCommand {
         id: ServiceTier::Fast.request_value().to_string(),
@@ -1883,6 +1894,50 @@ async fn slash_resume_opens_picker() {
 }
 
 #[tokio::test]
+async fn slash_resume_opens_picker_during_mcp_startup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Starting);
+
+    chat.dispatch_command(SlashCommand::Resume);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
+async fn slash_resume_is_blocked_during_agent_turn() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+
+    chat.dispatch_command(SlashCommand::Resume);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected unavailable-command error");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("'/resume' is disabled while a task is in progress."),
+        "{rendered}"
+    );
+}
+
+#[tokio::test]
+async fn slash_resume_allowed_via_composer_after_mcp_startup_completes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Starting);
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Ready);
+
+    // Behavioral coverage for the typed composer path (not direct dispatch):
+    // once MCP startup completes, the composer's cached running state settles to
+    // Idle so a task-gated command like `/resume` is accepted, not rejected.
+    chat.bottom_pane
+        .set_composer_text("/resume".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
 async fn slash_archive_confirmation_requests_current_thread_archive() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -1903,6 +1958,26 @@ async fn slash_archive_confirmation_requests_current_thread_archive() {
 #[tokio::test]
 async fn slash_resume_with_arg_requests_named_session() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane.set_composer_text(
+        "/resume my-saved-thread".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ResumeSessionByIdOrName(id_or_name)) if id_or_name == "my-saved-thread"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_resume_with_arg_requests_named_session_during_mcp_startup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);
+    notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Starting);
 
     chat.bottom_pane.set_composer_text(
         "/resume my-saved-thread".to_string(),

@@ -337,6 +337,8 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::HookCompletedEvent;
+use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::ModelRerouteEvent;
@@ -355,6 +357,7 @@ use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_protocol::protocol::ThreadUnsubscribeReason;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -3324,6 +3327,55 @@ impl Session {
 
     pub(crate) fn hooks(&self) -> Arc<Hooks> {
         self.services.hooks.load_full()
+    }
+
+    pub(crate) async fn run_thread_unsubscribe_hooks(&self, reason: ThreadUnsubscribeReason) {
+        let (cwd, model, permission_mode) = {
+            let state = self.state.lock().await;
+            let session_configuration = &state.session_configuration;
+            let permission_mode = match session_configuration.approval_policy.value() {
+                AskForApproval::Never => "bypassPermissions",
+                AskForApproval::UnlessTrusted
+                | AskForApproval::OnFailure
+                | AskForApproval::OnRequest
+                | AskForApproval::Granular(_) => "default",
+            }
+            .to_string();
+            (
+                session_configuration.cwd.clone(),
+                session_configuration.collaboration_mode.model().to_string(),
+                permission_mode,
+            )
+        };
+        let request = codex_hooks::ThreadUnsubscribeRequest {
+            session_id: self.session_id().into(),
+            cwd,
+            transcript_path: self.hook_transcript_path().await,
+            model,
+            permission_mode,
+            thread_id: self.thread_id(),
+            reason,
+        };
+        let hooks = self.hooks();
+        for run in hooks.preview_thread_unsubscribe(&request) {
+            self.send_event_raw(Event {
+                id: "thread-unsubscribe".to_string(),
+                msg: EventMsg::HookStarted(HookStartedEvent { turn_id: None, run }),
+            })
+            .await;
+        }
+        let outcome = hooks.run_thread_unsubscribe(request).await;
+        for completed in outcome.hook_events {
+            self.send_thread_unsubscribe_hook_completed(completed).await;
+        }
+    }
+
+    async fn send_thread_unsubscribe_hook_completed(&self, completed: HookCompletedEvent) {
+        self.send_event_raw(Event {
+            id: "thread-unsubscribe".to_string(),
+            msg: EventMsg::HookCompleted(completed),
+        })
+        .await;
     }
 
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {

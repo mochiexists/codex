@@ -77,6 +77,13 @@ pub enum SlashCommand {
     MemoryUpdate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlashCommandRunningState {
+    Idle,
+    McpStartup,
+    AgentTurn,
+}
+
 impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
@@ -182,6 +189,18 @@ impl SlashCommand {
 
     /// Whether this command can be run while a task is in progress.
     pub fn available_during_task(self) -> bool {
+        self.available_in_running_state(SlashCommandRunningState::AgentTurn)
+    }
+
+    pub(crate) fn available_in_running_state(self, state: SlashCommandRunningState) -> bool {
+        if matches!(state, SlashCommandRunningState::Idle) {
+            return true;
+        }
+        if matches!(state, SlashCommandRunningState::McpStartup)
+            && matches!(self, SlashCommand::Resume)
+        {
+            return true;
+        }
         match self {
             SlashCommand::New
             | SlashCommand::Archive
@@ -263,6 +282,7 @@ mod tests {
     use std::str::FromStr;
 
     use super::SlashCommand;
+    use super::SlashCommandRunningState;
 
     #[test]
     fn stop_command_is_canonical_name() {
@@ -290,6 +310,16 @@ mod tests {
         assert!(SlashCommand::Raw.available_in_side_conversation());
         assert!(SlashCommand::Raw.supports_inline_args());
         assert!(SlashCommand::App.available_during_task());
+    }
+
+    #[test]
+    fn resume_is_available_during_mcp_startup_but_not_agent_turn() {
+        assert!(
+            SlashCommand::Resume.available_in_running_state(SlashCommandRunningState::McpStartup)
+        );
+        assert!(
+            !SlashCommand::Resume.available_in_running_state(SlashCommandRunningState::AgentTurn)
+        );
     }
 
     #[test]

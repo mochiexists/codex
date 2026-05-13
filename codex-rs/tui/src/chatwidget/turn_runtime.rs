@@ -14,8 +14,23 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(
             self.turn_lifecycle.agent_turn_running || self.mcp_startup_status.is_some(),
         );
+        let slash_command_running_state = self.slash_command_running_state();
+        self.bottom_pane
+            .set_slash_command_running_state(slash_command_running_state);
         self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
+    }
+
+    pub(crate) fn slash_command_running_state(&self) -> SlashCommandRunningState {
+        if self.turn_lifecycle.agent_turn_running {
+            SlashCommandRunningState::AgentTurn
+        } else if self.mcp_startup_status.is_some() {
+            SlashCommandRunningState::McpStartup
+        } else if self.bottom_pane.is_task_running() {
+            SlashCommandRunningState::AgentTurn
+        } else {
+            SlashCommandRunningState::Idle
+        }
     }
 
     pub(super) fn collect_runtime_metrics_delta(&mut self) {

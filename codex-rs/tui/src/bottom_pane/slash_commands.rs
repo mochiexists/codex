@@ -8,6 +8,7 @@ use std::str::FromStr;
 use codex_utils_fuzzy_match::fuzzy_match;
 
 use crate::slash_command::SlashCommand;
+use crate::slash_command::SlashCommandRunningState;
 use crate::slash_command::built_in_slash_commands;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,9 +46,9 @@ impl SlashCommandItem {
         }
     }
 
-    pub(crate) fn available_during_task(&self) -> bool {
+    pub(crate) fn available_in_running_state(&self, state: SlashCommandRunningState) -> bool {
         match self {
-            Self::Builtin(cmd) => cmd.available_during_task(),
+            Self::Builtin(cmd) => cmd.available_in_running_state(state),
             Self::ServiceTier(_) => false,
         }
     }

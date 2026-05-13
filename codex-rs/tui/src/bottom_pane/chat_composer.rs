@@ -35,6 +35,8 @@
 //! Slash commands are staged for local history instead of being recorded immediately. Command
 //! recall is a two-phase handoff: stage the submitted slash text here, then record it after
 //! `ChatWidget` dispatches the command.
+//! The parent widget also supplies the slash-command running-state classification used to reject
+//! commands during active agent turns while still allowing selected commands during MCP startup.
 //!
 //! # Submission and Prompt Expansion
 //!
@@ -211,6 +213,7 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
+use crate::slash_command::SlashCommandRunningState;
 use crate::style::user_message_style;
 use codex_protocol::ThreadId;
 use codex_protocol::models::local_image_label_text;
@@ -364,6 +367,7 @@ pub(crate) struct ChatComposer {
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
     is_task_running: bool,
+    slash_command_running_state: SlashCommandRunningState,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
     input_disabled_placeholder: Option<String>,
@@ -562,6 +566,7 @@ impl ChatComposer {
             attached_images: Vec::new(),
             placeholder_text,
             is_task_running: false,
+            slash_command_running_state: SlashCommandRunningState::Idle,
             input_enabled: true,
             input_disabled_placeholder: None,
             paste_burst: PasteBurst::default(),
@@ -3144,7 +3149,7 @@ impl ChatComposer {
     }
 
     fn reject_slash_command_if_unavailable(&self, command: &SlashCommandItem) -> bool {
-        if !self.is_task_running || command.available_during_task() {
+        if command.available_in_running_state(self.slash_command_running_state) {
             return false;
         }
         let message = format!(
@@ -4323,6 +4328,11 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+        self.slash_command_running_state = if running {
+            SlashCommandRunningState::AgentTurn
+        } else {
+            SlashCommandRunningState::Idle
+        };
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
@@ -4341,6 +4351,10 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
+    }
+
+    pub fn set_slash_command_running_state(&mut self, state: SlashCommandRunningState) {
+        self.slash_command_running_state = state;
     }
 
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) -> bool {

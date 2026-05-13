@@ -16,13 +16,14 @@ pub use declarations::plugin_hook_declarations;
 pub use engine::HookListEntry;
 pub use events::common::SubagentHookContext;
 /// Hook event names as they appear in hooks JSON and config files.
-pub const HOOK_EVENT_NAMES: [&str; 10] = [
+pub const HOOK_EVENT_NAMES: [&str; 11] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
     "PreCompact",
     "PostCompact",
     "SessionStart",
+    "ThreadUnsubscribe",
     "UserPromptSubmit",
     "SubagentStart",
     "SubagentStop",
@@ -63,6 +64,8 @@ pub use events::session_start::StartHookTarget;
 pub use events::stop::StopHookTarget;
 pub use events::stop::StopOutcome;
 pub use events::stop::StopRequest;
+pub use events::thread_unsubscribe::ThreadUnsubscribeOutcome;
+pub use events::thread_unsubscribe::ThreadUnsubscribeRequest;
 pub use events::user_prompt_submit::UserPromptSubmitOutcome;
 pub use events::user_prompt_submit::UserPromptSubmitRequest;
 pub use legacy_notify::legacy_notify_json;
@@ -89,6 +92,7 @@ pub fn hook_event_key_label(event_name: HookEventName) -> &'static str {
         HookEventName::PreCompact => "pre_compact",
         HookEventName::PostCompact => "post_compact",
         HookEventName::SessionStart => "session_start",
+        HookEventName::ThreadUnsubscribe => "thread_unsubscribe",
         HookEventName::UserPromptSubmit => "user_prompt_submit",
         HookEventName::SubagentStart => "subagent_start",
         HookEventName::SubagentStop => "subagent_stop",

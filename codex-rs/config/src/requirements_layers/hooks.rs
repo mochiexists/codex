@@ -210,6 +210,7 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
         pre_compact,
         post_compact,
         session_start,
+        thread_unsubscribe,
         user_prompt_submit,
         subagent_start,
         subagent_stop,
@@ -223,6 +224,7 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
     changed |= append_vec(&mut existing.pre_compact, pre_compact);
     changed |= append_vec(&mut existing.post_compact, post_compact);
     changed |= append_vec(&mut existing.session_start, session_start);
+    changed |= append_vec(&mut existing.thread_unsubscribe, thread_unsubscribe);
     changed |= append_vec(&mut existing.user_prompt_submit, user_prompt_submit);
     changed |= append_vec(&mut existing.subagent_start, subagent_start);
     changed |= append_vec(&mut existing.subagent_stop, subagent_stop);

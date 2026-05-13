@@ -18,6 +18,8 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::thread_unsubscribe::ThreadUnsubscribeOutcome;
+use crate::events::thread_unsubscribe::ThreadUnsubscribeRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::output_spill::HookOutputSpiller;
@@ -69,6 +71,7 @@ impl ConfiguredHandler {
             codex_protocol::protocol::HookEventName::PreCompact => "pre-compact",
             codex_protocol::protocol::HookEventName::PostCompact => "post-compact",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
+            codex_protocol::protocol::HookEventName::ThreadUnsubscribe => "thread-unsubscribe",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::SubagentStart => "subagent-start",
             codex_protocol::protocol::HookEventName::SubagentStop => "subagent-stop",
@@ -178,6 +181,20 @@ impl ClaudeHooksEngine {
             .maybe_spill_texts(session_id, outcome.additional_contexts)
             .await;
         outcome
+    }
+
+    pub(crate) fn preview_thread_unsubscribe(
+        &self,
+        request: &ThreadUnsubscribeRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::thread_unsubscribe::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_thread_unsubscribe(
+        &self,
+        request: ThreadUnsubscribeRequest,
+    ) -> ThreadUnsubscribeOutcome {
+        crate::events::thread_unsubscribe::run(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {

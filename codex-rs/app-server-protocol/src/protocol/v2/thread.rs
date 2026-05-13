@@ -17,6 +17,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
+use codex_protocol::protocol::ThreadUnsubscribeReason as CoreThreadUnsubscribeReason;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -593,7 +594,15 @@ pub struct ThreadArchiveResponse {}
 #[ts(export_to = "v2/")]
 pub struct ThreadUnsubscribeParams {
     pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub reason: Option<ThreadUnsubscribeReason>,
 }
+
+v2_enum_from_core!(
+    pub enum ThreadUnsubscribeReason from CoreThreadUnsubscribeReason {
+        UserRequested, ThreadSwitch, Programmatic
+    }
+);
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

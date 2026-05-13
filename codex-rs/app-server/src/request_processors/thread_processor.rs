@@ -716,11 +716,14 @@ impl ThreadRequestProcessor {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        if self.thread_manager.get_thread(thread_id).await.is_err() {
-            self.finalize_thread_teardown(thread_id).await;
-            return Ok(ThreadUnsubscribeResponse {
-                status: ThreadUnsubscribeStatus::NotLoaded,
-            });
+        let thread = match self.thread_manager.get_thread(thread_id).await {
+            Ok(thread) => thread,
+            Err(_) => {
+                self.finalize_thread_teardown(thread_id).await;
+                return Ok(ThreadUnsubscribeResponse {
+                    status: ThreadUnsubscribeStatus::NotLoaded,
+                });
+            }
         };
 
         let was_subscribed = self
@@ -729,6 +732,14 @@ impl ThreadRequestProcessor {
             .await;
 
         let status = if was_subscribed {
+            thread
+                .run_thread_unsubscribe_hooks(
+                    params
+                        .reason
+                        .map(codex_app_server_protocol::ThreadUnsubscribeReason::to_core)
+                        .unwrap_or(codex_protocol::protocol::ThreadUnsubscribeReason::Programmatic),
+                )
+                .await;
             ThreadUnsubscribeStatus::Unsubscribed
         } else {
             ThreadUnsubscribeStatus::NotSubscribed

@@ -27,6 +27,8 @@ const PRE_COMPACT_INPUT_FIXTURE: &str = "pre-compact.command.input.schema.json";
 const PRE_COMPACT_OUTPUT_FIXTURE: &str = "pre-compact.command.output.schema.json";
 const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.json";
 const SESSION_START_OUTPUT_FIXTURE: &str = "session-start.command.output.schema.json";
+const THREAD_UNSUBSCRIBE_INPUT_FIXTURE: &str = "thread-unsubscribe.command.input.schema.json";
+const THREAD_UNSUBSCRIBE_OUTPUT_FIXTURE: &str = "thread-unsubscribe.command.output.schema.json";
 const USER_PROMPT_SUBMIT_INPUT_FIXTURE: &str = "user-prompt-submit.command.input.schema.json";
 const USER_PROMPT_SUBMIT_OUTPUT_FIXTURE: &str = "user-prompt-submit.command.output.schema.json";
 const SUBAGENT_START_INPUT_FIXTURE: &str = "subagent-start.command.input.schema.json";
@@ -109,6 +111,8 @@ pub(crate) enum HookEventNameWire {
     PostCompact,
     #[serde(rename = "SessionStart")]
     SessionStart,
+    #[serde(rename = "ThreadUnsubscribe")]
+    ThreadUnsubscribe,
     #[serde(rename = "UserPromptSubmit")]
     UserPromptSubmit,
     #[serde(rename = "SubagentStart")]
@@ -421,6 +425,15 @@ pub(crate) struct SubagentStartHookSpecificOutputWire {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "thread-unsubscribe.command.output")]
+pub(crate) struct ThreadUnsubscribeCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "user-prompt-submit.command.output")]
 pub(crate) struct UserPromptSubmitCommandOutputWire {
     #[serde(flatten)]
@@ -536,6 +549,46 @@ pub(crate) struct SubagentStartCommandInput {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "thread-unsubscribe.command.input")]
+pub(crate) struct ThreadUnsubscribeCommandInput {
+    pub session_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "thread_unsubscribe_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub thread_id: String,
+    #[schemars(schema_with = "thread_unsubscribe_reason_schema")]
+    pub reason: String,
+}
+
+impl ThreadUnsubscribeCommandInput {
+    pub(crate) fn new(
+        session_id: impl Into<String>,
+        transcript_path: Option<PathBuf>,
+        cwd: impl Into<String>,
+        model: impl Into<String>,
+        permission_mode: impl Into<String>,
+        thread_id: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            transcript_path: NullableString::from_path(transcript_path),
+            cwd: cwd.into(),
+            hook_event_name: "ThreadUnsubscribe".to_string(),
+            model: model.into(),
+            permission_mode: permission_mode.into(),
+            thread_id: thread_id.into(),
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "user-prompt-submit.command.input")]
 pub(crate) struct UserPromptSubmitCommandInput {
     pub session_id: String,
@@ -647,6 +700,14 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
         schema_json::<SessionStartCommandOutputWire>()?,
     )?;
     write_schema(
+        &generated_dir.join(THREAD_UNSUBSCRIBE_INPUT_FIXTURE),
+        schema_json::<ThreadUnsubscribeCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(THREAD_UNSUBSCRIBE_OUTPUT_FIXTURE),
+        schema_json::<ThreadUnsubscribeCommandOutputWire>()?,
+    )?;
+    write_schema(
         &generated_dir.join(USER_PROMPT_SUBMIT_INPUT_FIXTURE),
         schema_json::<UserPromptSubmitCommandInput>()?,
     )?;
@@ -737,6 +798,10 @@ fn session_start_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("SessionStart")
 }
 
+fn thread_unsubscribe_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("ThreadUnsubscribe")
+}
+
 fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("PostToolUse")
 }
@@ -785,6 +850,10 @@ fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn session_start_source_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_enum_schema(&["startup", "resume", "clear", "compact"])
+}
+
+fn thread_unsubscribe_reason_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["user_requested", "thread_switch", "programmatic"])
 }
 
 fn compaction_trigger_schema(_gen: &mut SchemaGenerator) -> Schema {
@@ -853,6 +922,8 @@ mod tests {
     use super::SubagentStartCommandInput;
     use super::SubagentStartCommandOutputWire;
     use super::SubagentStopCommandInput;
+    use super::THREAD_UNSUBSCRIBE_INPUT_FIXTURE;
+    use super::THREAD_UNSUBSCRIBE_OUTPUT_FIXTURE;
     use super::USER_PROMPT_SUBMIT_INPUT_FIXTURE;
     use super::USER_PROMPT_SUBMIT_OUTPUT_FIXTURE;
     use super::UserPromptSubmitCommandInput;
@@ -903,6 +974,12 @@ mod tests {
             }
             SESSION_START_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/session-start.command.output.schema.json")
+            }
+            THREAD_UNSUBSCRIBE_INPUT_FIXTURE => {
+                include_str!("../schema/generated/thread-unsubscribe.command.input.schema.json")
+            }
+            THREAD_UNSUBSCRIBE_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/thread-unsubscribe.command.output.schema.json")
             }
             USER_PROMPT_SUBMIT_INPUT_FIXTURE => {
                 include_str!("../schema/generated/user-prompt-submit.command.input.schema.json")
@@ -969,6 +1046,8 @@ mod tests {
             PRE_TOOL_USE_OUTPUT_FIXTURE,
             SESSION_START_INPUT_FIXTURE,
             SESSION_START_OUTPUT_FIXTURE,
+            THREAD_UNSUBSCRIBE_INPUT_FIXTURE,
+            THREAD_UNSUBSCRIBE_OUTPUT_FIXTURE,
             USER_PROMPT_SUBMIT_INPUT_FIXTURE,
             USER_PROMPT_SUBMIT_OUTPUT_FIXTURE,
             SUBAGENT_START_INPUT_FIXTURE,

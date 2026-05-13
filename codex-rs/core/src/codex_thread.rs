@@ -30,6 +30,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::protocol::ThreadUnsubscribeReason;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
@@ -207,6 +208,13 @@ impl CodexThread {
         self.codex
             .session
             .emit_thread_idle_lifecycle_if_idle()
+            .await;
+    }
+
+    pub async fn run_thread_unsubscribe_hooks(&self, reason: ThreadUnsubscribeReason) {
+        self.codex
+            .session
+            .run_thread_unsubscribe_hooks(reason)
             .await;
     }
 

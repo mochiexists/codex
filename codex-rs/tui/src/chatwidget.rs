@@ -318,6 +318,7 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
+use crate::slash_command::SlashCommandRunningState;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status::remote_connection::RemoteConnectionStatus;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;

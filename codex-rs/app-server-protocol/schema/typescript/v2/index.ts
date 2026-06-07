@@ -433,6 +433,7 @@ export type { ThreadUnarchiveParams } from "./ThreadUnarchiveParams";
 export type { ThreadUnarchiveResponse } from "./ThreadUnarchiveResponse";
 export type { ThreadUnarchivedNotification } from "./ThreadUnarchivedNotification";
 export type { ThreadUnsubscribeParams } from "./ThreadUnsubscribeParams";
+export type { ThreadUnsubscribeReason } from "./ThreadUnsubscribeReason";
 export type { ThreadUnsubscribeResponse } from "./ThreadUnsubscribeResponse";
 export type { ThreadUnsubscribeStatus } from "./ThreadUnsubscribeStatus";
 export type { TokenUsageBreakdown } from "./TokenUsageBreakdown";

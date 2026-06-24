@@ -223,7 +223,7 @@ where
         ))
     }
 
-    fn with_screen_size_and_cursor_position(
+    pub(crate) fn with_screen_size_and_cursor_position(
         backend: B,
         screen_size: Size,
         cursor_pos: Position,
@@ -486,9 +486,8 @@ where
     }
 
     /// Force the next draw pass to repaint the entire viewport by resetting the
-    /// diff buffer. Call this after operations that move screen content outside of
-    /// ratatui's knowledge (e.g., Zellij-mode scrolling via raw newlines), since
-    /// the diff buffer's assumptions about what is currently displayed are invalid.
+    /// diff buffer. Call this after raw terminal operations that move screen
+    /// content outside ratatui's knowledge.
     pub fn invalidate_viewport(&mut self) {
         self.previous_buffer_mut().reset();
     }

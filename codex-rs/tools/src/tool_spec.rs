@@ -25,8 +25,6 @@ pub enum ToolSpec {
         description: String,
         parameters: JsonSchema,
     },
-    #[serde(rename = "local_shell")]
-    LocalShell {},
     #[serde(rename = "image_generation")]
     ImageGeneration { output_format: String },
     // TODO: Understand why we get an error on web_search although the API docs
@@ -39,6 +37,8 @@ pub enum ToolSpec {
     WebSearch {
         #[serde(skip_serializing_if = "Option::is_none")]
         external_web_access: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        index_gated_web_access: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
         filters: Option<ResponsesApiWebSearchFilters>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,7 +58,6 @@ impl ToolSpec {
             ToolSpec::Function(tool) => tool.name.as_str(),
             ToolSpec::Namespace(namespace) => namespace.name.as_str(),
             ToolSpec::ToolSearch { .. } => "tool_search",
-            ToolSpec::LocalShell {} => "local_shell",
             ToolSpec::ImageGeneration { .. } => "image_generation",
             ToolSpec::WebSearch { .. } => "web_search",
             ToolSpec::Freeform(tool) => tool.name.as_str(),

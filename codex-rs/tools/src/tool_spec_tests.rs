@@ -57,7 +57,6 @@ fn tool_spec_name_covers_all_variants() {
         .name(),
         "tool_search"
     );
-    assert_eq!(ToolSpec::LocalShell {}.name(), "local_shell");
     assert_eq!(
         ToolSpec::ImageGeneration {
             output_format: "png".to_string(),
@@ -68,6 +67,7 @@ fn tool_spec_name_covers_all_variants() {
     assert_eq!(
         ToolSpec::WebSearch {
             external_web_access: Some(true),
+            index_gated_web_access: None,
             filters: None,
             user_location: None,
             search_context_size: None,
@@ -200,6 +200,7 @@ fn web_search_tool_spec_serializes_expected_wire_shape() {
     assert_eq!(
         serde_json::to_value(ToolSpec::WebSearch {
             external_web_access: Some(true),
+            index_gated_web_access: None,
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
             }),

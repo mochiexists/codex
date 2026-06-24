@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -61,14 +63,12 @@ impl ThreadMetadataSync {
         } else {
             None
         };
-        let dynamic_tools =
-            (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone());
         let update = ThreadMetadataPatch {
             model_provider: Some(params.metadata.model_provider.clone()),
             created_at: Some(created_at),
             updated_at: Some(created_at),
             source: Some(params.source.clone()),
-            thread_source: Some(params.thread_source),
+            thread_source: Some(params.thread_source.clone()),
             agent_nickname: Some(params.source.get_nickname()),
             agent_role: Some(params.source.get_agent_role()),
             agent_path: Some(params.source.get_agent_path().map(Into::into)),
@@ -76,7 +76,6 @@ impl ThreadMetadataSync {
             cli_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             git_info: git_info.map(git_info_patch_from_observation),
             memory_mode: Some(params.metadata.memory_mode),
-            dynamic_tools,
             ..Default::default()
         };
         Self {
@@ -111,11 +110,15 @@ impl ThreadMetadataSync {
             defer_resume_update_until_append: false,
         };
         if let Some(history) = params.history.as_deref() {
-            let update = sync.observe_resume_history(history);
-            sync.merge_pending_update(update);
-            sync.defer_resume_update_until_append = sync.pending_update.is_some();
+            sync.record_resume_history(history);
         }
         sync
+    }
+
+    pub(crate) fn record_resume_history(&mut self, history: &[RolloutItem]) {
+        let update = self.observe_resume_history(history);
+        self.merge_pending_update(update);
+        self.defer_resume_update_until_append = self.pending_update.is_some();
     }
 
     pub(crate) fn take_pending_update(&self) -> Option<PendingThreadMetadataPatch> {
@@ -157,11 +160,17 @@ impl ThreadMetadataSync {
         let affects_metadata = items
             .iter()
             .any(codex_state::rollout_item_affects_thread_metadata);
-        let update = if affects_metadata {
+        let advances_recency = items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnStarted(_))));
+        let mut update = if affects_metadata {
             self.observe_items(items)?
         } else {
             thread_updated_at_touch()
         };
+        if advances_recency {
+            update.advance_recency_at = Some(Utc::now());
+        }
         self.merge_pending_update(Some(update));
         if !affects_metadata
             && !self
@@ -204,7 +213,7 @@ impl ThreadMetadataSync {
                 RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == self.thread_id => {
                     update.created_at = parse_session_timestamp(meta_line.meta.timestamp.as_str());
                     update.source = Some(meta_line.meta.source.clone());
-                    update.thread_source = Some(meta_line.meta.thread_source);
+                    update.thread_source = Some(meta_line.meta.thread_source.clone());
                     update.agent_nickname = Some(meta_line.meta.agent_nickname.clone());
                     update.agent_role = Some(meta_line.meta.agent_role.clone());
                     update.agent_path = Some(meta_line.meta.agent_path.clone());
@@ -228,19 +237,16 @@ impl ThreadMetadataSync {
                     {
                         update.memory_mode = Some(memory_mode);
                     }
-                    if let Some(dynamic_tools) = meta_line.meta.dynamic_tools.clone() {
-                        update.dynamic_tools = Some(dynamic_tools);
-                    }
                 }
                 RolloutItem::TurnContext(turn_ctx) => {
-                    if !self.cwd_seen && !turn_ctx.cwd.as_os_str().is_empty() {
+                    if !self.cwd_seen {
                         self.cwd_seen = true;
-                        update.cwd = Some(turn_ctx.cwd.clone());
+                        update.cwd = Some(turn_ctx.cwd.clone().into_path_buf());
                     }
                     update.model = Some(turn_ctx.model.clone());
-                    update.reasoning_effort = turn_ctx.effort;
+                    update.reasoning_effort = turn_ctx.effort.clone();
                     update.approval_mode = Some(turn_ctx.approval_policy);
-                    update.sandbox_policy = Some(turn_ctx.sandbox_policy.clone());
+                    update.permission_profile = Some(turn_ctx.permission_profile());
                 }
                 RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
                     if let Some(preview) = user_message_preview(user) {
@@ -278,6 +284,7 @@ impl ThreadMetadataSync {
                 RolloutItem::SessionMeta(_)
                 | RolloutItem::EventMsg(_)
                 | RolloutItem::ResponseItem(_)
+                | RolloutItem::InterAgentCommunication(_)
                 | RolloutItem::Compacted(_) => {}
             }
         }
@@ -352,6 +359,7 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.model.is_some()
         || update.reasoning_effort.is_some()
         || update.created_at.is_some()
+        || update.advance_recency_at.is_some()
         || update.source.is_some()
         || update.thread_source.is_some()
         || update.agent_nickname.is_some()
@@ -360,12 +368,11 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.cwd.is_some()
         || update.cli_version.is_some()
         || update.approval_mode.is_some()
-        || update.sandbox_policy.is_some()
+        || update.permission_profile.is_some()
         || update.token_usage.is_some()
         || update.first_user_message.is_some()
         || update.git_info.is_some()
         || update.memory_mode.is_some()
-        || update.dynamic_tools.is_some()
 }
 
 fn git_info_patch_from_observation(git_info: GitInfo) -> GitInfoPatch {
@@ -385,11 +392,11 @@ mod tests {
     use codex_protocol::protocol::ThreadGoal;
     use codex_protocol::protocol::ThreadGoalStatus;
     use codex_protocol::protocol::ThreadGoalUpdatedEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::ThreadEventPersistenceMode;
     use crate::ThreadPersistenceMetadata;
 
     #[test]
@@ -482,6 +489,10 @@ mod tests {
         let item = RolloutItem::Compacted(CompactedItem {
             message: "compacted".to_string(),
             replacement_history: None,
+            window_number: None,
+            first_window_id: None,
+            previous_window_id: None,
+            window_id: None,
         });
 
         let first = sync
@@ -499,6 +510,27 @@ mod tests {
             sync.take_pending_update().is_some(),
             "coalesced touches still flush at the next barrier"
         );
+    }
+
+    #[test]
+    fn turn_start_advances_recency_at_without_changing_updated_at_behavior() {
+        let thread_id = ThreadId::new();
+        let mut sync = ThreadMetadataSync::for_resume(&resume_params(thread_id, Vec::new()));
+
+        let update = sync
+            .observe_appended_items(&[RolloutItem::EventMsg(EventMsg::TurnStarted(
+                TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    trace_id: None,
+                    started_at: None,
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                },
+            ))])
+            .expect("turn start metadata update");
+
+        assert!(update.patch.updated_at.is_some());
+        assert!(update.patch.advance_recency_at.is_some());
     }
 
     #[test]
@@ -529,29 +561,31 @@ mod tests {
         ResumeThreadParams {
             thread_id,
             rollout_path: None,
-            history: Some(history),
+            history: Some(Arc::new(history)),
             include_archived: false,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
             },
-            event_persistence_mode: ThreadEventPersistenceMode::Limited,
         }
     }
 
     fn user_message(message: &str) -> UserMessageEvent {
         UserMessageEvent {
+            client_id: None,
             message: message.to_string(),
             images: None,
             local_images: Vec::new(),
             text_elements: Vec::new(),
+            ..Default::default()
         }
     }
 
     fn session_meta(thread_id: ThreadId) -> SessionMetaLine {
         SessionMetaLine {
             meta: SessionMeta {
+                session_id: thread_id.into(),
                 id: thread_id,
                 timestamp: "2025-01-03T12:00:00Z".to_string(),
                 source: SessionSource::Exec,

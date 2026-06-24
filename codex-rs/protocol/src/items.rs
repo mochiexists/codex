@@ -1,6 +1,7 @@
 use crate::mcp::CallToolResult;
 use crate::memory_citation::MemoryCitation;
 use crate::models::ContentItem;
+use crate::models::ImageDetail;
 use crate::models::MessagePhase;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
@@ -24,6 +25,7 @@ use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use quick_xml::de::from_str as from_xml_str;
 use quick_xml::se::to_string as to_xml_string;
 use schemars::JsonSchema;
@@ -46,6 +48,7 @@ pub enum TurnItem {
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
     ImageView(ImageViewItem),
+    Sleep(SleepItem),
     ImageGeneration(ImageGenerationItem),
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
@@ -55,6 +58,9 @@ pub enum TurnItem {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct UserMessageItem {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub client_id: Option<String>,
     pub content: Vec<UserInput>,
 }
 
@@ -133,7 +139,17 @@ pub struct WebSearchItem {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ImageViewItem {
     pub id: String,
-    pub path: AbsolutePathBuf,
+    /// Path resolved within the selected execution environment.
+    ///
+    /// This core protocol type is not exposed directly in the app-server API.
+    /// App-server converts the path to `LegacyAppPathString` at its boundary.
+    pub path: PathUri,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct SleepItem {
+    pub id: String,
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -177,7 +193,16 @@ pub struct McpToolCallItem {
     pub arguments: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub connector_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub link_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin_id: Option<String>,
     pub status: McpToolCallStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -233,6 +258,7 @@ impl UserMessageItem {
     pub fn new(content: &[UserInput]) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
+            client_id: None,
             content: content.to_vec(),
         }
     }
@@ -241,9 +267,12 @@ impl UserMessageItem {
         // Legacy user-message events flatten only text inputs into `message` and
         // rebase text element ranges onto that concatenated text.
         EventMsg::UserMessage(UserMessageEvent {
+            client_id: self.client_id.clone(),
             message: self.message(),
             images: Some(self.image_urls()),
+            image_details: self.image_details(),
             local_images: self.local_image_paths(),
+            local_image_details: self.local_image_details(),
             text_elements: self.text_elements(),
         })
     }
@@ -266,6 +295,7 @@ impl UserMessageItem {
             if let UserInput::Text {
                 text,
                 text_elements,
+                ..
             } = input
             {
                 // Text element ranges are relative to each text chunk; offset them so they align
@@ -290,21 +320,54 @@ impl UserMessageItem {
         self.content
             .iter()
             .filter_map(|c| match c {
-                UserInput::Image { image_url } => Some(image_url.clone()),
+                UserInput::Image { image_url, .. } => Some(image_url.clone()),
                 _ => None,
             })
             .collect()
+    }
+
+    pub fn image_details(&self) -> Vec<Option<ImageDetail>> {
+        trim_trailing_default_image_details(
+            self.content
+                .iter()
+                .filter_map(|c| match c {
+                    UserInput::Image { detail, .. } => Some(*detail),
+                    _ => None,
+                })
+                .collect(),
+        )
     }
 
     pub fn local_image_paths(&self) -> Vec<std::path::PathBuf> {
         self.content
             .iter()
             .filter_map(|c| match c {
-                UserInput::LocalImage { path } => Some(path.clone()),
+                UserInput::LocalImage { path, .. } => Some(path.clone()),
                 _ => None,
             })
             .collect()
     }
+
+    pub fn local_image_details(&self) -> Vec<Option<ImageDetail>> {
+        trim_trailing_default_image_details(
+            self.content
+                .iter()
+                .filter_map(|c| match c {
+                    UserInput::LocalImage { detail, .. } => Some(*detail),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+}
+
+fn trim_trailing_default_image_details(
+    mut details: Vec<Option<ImageDetail>>,
+) -> Vec<Option<ImageDetail>> {
+    while matches!(details.last(), Some(None)) {
+        details.pop();
+    }
+    details
 }
 
 impl HookPromptItem {
@@ -346,6 +409,7 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
         role: "user".to_string(),
         content,
         phase: None,
+        internal_chat_message_metadata_passthrough: None,
     })
 }
 
@@ -493,7 +557,10 @@ impl McpToolCallItem {
                 tool: self.tool.clone(),
                 arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
             },
+            connector_id: self.connector_id.clone(),
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+            link_id: self.link_id.clone(),
+            plugin_id: self.plugin_id.clone(),
         })
     }
 
@@ -512,6 +579,9 @@ impl McpToolCallItem {
                 arguments: (!self.arguments.is_null()).then(|| self.arguments.clone()),
             },
             mcp_app_resource_uri: self.mcp_app_resource_uri.clone(),
+            connector_id: self.connector_id.clone(),
+            link_id: self.link_id.clone(),
+            plugin_id: self.plugin_id.clone(),
             duration: self.duration?,
             result,
         }))
@@ -528,6 +598,7 @@ impl TurnItem {
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
             TurnItem::ImageView(item) => item.id.clone(),
+            TurnItem::Sleep(item) => item.id.clone(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
             TurnItem::FileChange(item) => item.id.clone(),
             TurnItem::McpToolCall(item) => item.id.clone(),
@@ -548,6 +619,7 @@ impl TurnItem {
                     path: item.path.clone(),
                 })]
             }
+            TurnItem::Sleep(_) => Vec::new(),
             TurnItem::ImageGeneration(item) => vec![item.as_legacy_event()],
             TurnItem::FileChange(item) => item
                 .as_legacy_end_event(String::new())

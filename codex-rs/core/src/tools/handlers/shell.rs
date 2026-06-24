@@ -1,16 +1,16 @@
 use codex_features::Feature;
 use codex_protocol::models::ShellCommandToolCallParams;
-use codex_protocol::models::ShellToolCallParams;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
+use crate::shell::ShellType;
 use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -19,12 +19,7 @@ use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::handlers::rewrite_function_arguments;
-use crate::tools::handlers::updated_hook_command;
-use crate::tools::hook_names::HookToolName;
 use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::registry::PostToolUsePayload;
-use crate::tools::registry::PreToolUsePayload;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
@@ -32,37 +27,12 @@ use crate::tools::sandboxing::ToolCtx;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_tools::ToolName;
+use codex_utils_path_uri::PathUri;
 
-mod container_exec;
-mod local_shell;
 mod shell_command;
-mod shell_handler;
 
-pub use container_exec::ContainerExecHandler;
-pub use local_shell::LocalShellHandler;
 pub use shell_command::ShellCommandHandler;
 pub(crate) use shell_command::ShellCommandHandlerOptions;
-pub use shell_handler::ShellHandler;
-
-fn shell_function_payload_command(payload: &ToolPayload) -> Option<String> {
-    let ToolPayload::Function { arguments } = payload else {
-        return None;
-    };
-
-    parse_arguments::<ShellToolCallParams>(arguments)
-        .ok()
-        .map(|params| codex_shell_command::parse_command::shlex_join(&params.command))
-}
-
-fn local_shell_payload_command(payload: &ToolPayload) -> Option<String> {
-    let ToolPayload::LocalShell { params } = payload else {
-        return None;
-    };
-
-    Some(codex_shell_command::parse_command::shlex_join(
-        &params.command,
-    ))
-}
 
 fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
     let ToolPayload::Function { arguments } = payload else {
@@ -77,105 +47,51 @@ fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
 struct RunExecLikeArgs {
     tool_name: ToolName,
     exec_params: ExecParams,
+    cancellation_token: CancellationToken,
     hook_command: String,
+    shell_type: Option<ShellType>,
     additional_permissions: Option<AdditionalPermissionProfile>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::session::session::Session>,
     turn: Arc<TurnContext>,
+    turn_environment: TurnEnvironment,
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
-    freeform: bool,
     shell_runtime_backend: ShellRuntimeBackend,
-}
-
-fn shell_function_pre_tool_use_payload(invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-    shell_function_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
-        tool_name: HookToolName::bash(),
-        tool_input: serde_json::json!({ "command": command }),
-    })
-}
-
-fn rewrite_shell_function_updated_hook_input(
-    mut invocation: ToolInvocation,
-    updated_input: JsonValue,
-    tool_name: &str,
-) -> Result<ToolInvocation, FunctionCallError> {
-    let ToolPayload::Function { arguments } = invocation.payload else {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "hook input rewrite received unsupported {tool_name} payload"
-        )));
-    };
-    let command = shlex::split(updated_hook_command(&updated_input)?).ok_or_else(|| {
-        FunctionCallError::RespondToModel(
-            "hook returned shell input with an invalid command string".to_string(),
-        )
-    })?;
-    invocation.payload = ToolPayload::Function {
-        arguments: rewrite_function_arguments(&arguments, tool_name, |arguments| {
-            arguments.insert(
-                "command".to_string(),
-                JsonValue::Array(command.into_iter().map(JsonValue::String).collect()),
-            );
-        })?,
-    };
-    Ok(invocation)
-}
-
-fn shell_function_post_tool_use_payload(
-    invocation: &ToolInvocation,
-    result: &FunctionToolOutput,
-) -> Option<PostToolUsePayload> {
-    let tool_response = result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
-    let command = shell_function_payload_command(&invocation.payload)?;
-    Some(PostToolUsePayload {
-        tool_name: HookToolName::bash(),
-        tool_use_id: invocation.call_id.clone(),
-        tool_input: serde_json::json!({ "command": command }),
-        tool_response,
-    })
 }
 
 async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, FunctionCallError> {
     let RunExecLikeArgs {
         tool_name,
         exec_params,
+        cancellation_token,
         hook_command,
+        shell_type,
         additional_permissions,
         prefix_rule,
         session,
         turn,
+        turn_environment,
         tracker,
         call_id,
-        freeform,
         shell_runtime_backend,
     } = args;
 
-    let mut exec_params = exec_params;
-    let Some(turn_environment) = turn.environments.primary() else {
-        return Err(FunctionCallError::RespondToModel(
-            "shell is unavailable in this session".to_string(),
-        ));
-    };
     let fs = turn_environment.environment.get_filesystem();
 
-    let dependency_env = session.dependency_env().await;
-    if !dependency_env.is_empty() {
-        exec_params.env.extend(dependency_env.clone());
-    }
-
-    let mut explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
-    for key in dependency_env.keys() {
-        if let Some(value) = exec_params.env.get(key) {
-            explicit_env_overrides.insert(key.clone(), value.clone());
-        }
-    }
-
+    let explicit_env_overrides = turn
+        .config
+        .permissions
+        .shell_environment_policy
+        .r#set
+        .clone();
     let exec_permission_approvals_enabled =
         session.features().enabled(Feature::ExecPermissionApprovals);
     let requested_additional_permissions = additional_permissions.clone();
     let effective_additional_permissions = apply_granted_turn_permissions(
         session.as_ref(),
-        turn.cwd.as_path(),
+        &turn_environment.environment_id,
+        exec_params.cwd.as_path(),
         exec_params.sandbox_permissions,
         additional_permissions,
     )
@@ -222,9 +138,10 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     }
 
     // Intercept apply_patch if present.
+    let apply_patch_cwd = PathUri::from_abs_path(&exec_params.cwd);
     if let Some(output) = intercept_apply_patch(
         &exec_params.command,
-        &exec_params.cwd,
+        &apply_patch_cwd,
         fs.as_ref(),
         turn_environment.clone(),
         session.clone(),
@@ -239,12 +156,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     }
 
     let source = ExecCommandSource::Agent;
-    let emitter = ToolEmitter::shell(
-        exec_params.command.clone(),
-        exec_params.cwd.clone(),
-        source,
-        freeform,
-    );
+    let emitter = ToolEmitter::shell(exec_params.command.clone(), exec_params.cwd.clone(), source);
     let event_ctx = ToolEventCtx::new(
         session.as_ref(),
         turn.as_ref(),
@@ -253,7 +165,6 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     );
     emitter.begin(event_ctx).await;
 
-    let file_system_sandbox_policy = turn.file_system_sandbox_policy();
     let exec_approval_requirement = session
         .services
         .exec_policy
@@ -261,8 +172,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
             command: &exec_params.command,
             approval_policy: turn.approval_policy.value(),
             permission_profile: turn.permission_profile(),
-            file_system_sandbox_policy: &file_system_sandbox_policy,
-            sandbox_cwd: turn.cwd.as_path(),
+            windows_sandbox_level: turn.windows_sandbox_level,
             sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
                 codex_protocol::models::SandboxPermissions::UseDefault
             } else {
@@ -274,9 +184,12 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
 
     let req = ShellRequest {
         command: exec_params.command.clone(),
+        turn_environment: turn_environment.clone(),
+        shell_type,
         hook_command,
         cwd: exec_params.cwd.clone(),
         timeout_ms: exec_params.expiration.timeout_ms(),
+        cancellation_token,
         env: exec_params.env.clone(),
         explicit_env_overrides,
         network: exec_params.network.clone(),
@@ -289,15 +202,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         exec_approval_requirement,
     };
     let mut orchestrator = ToolOrchestrator::new();
-    let mut runtime = {
-        use ShellRuntimeBackend::*;
-        match shell_runtime_backend {
-            Generic => ShellRuntime::new(),
-            backend @ (ShellCommandClassic | ShellCommandZshFork) => {
-                ShellRuntime::for_shell_command(backend)
-            }
-        }
-    };
+    let mut runtime = ShellRuntime::for_shell_command(shell_runtime_backend);
     let tool_ctx = ToolCtx {
         session: session.clone(),
         turn: turn.clone(),
@@ -323,7 +228,9 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     let post_tool_use_response = out
         .as_ref()
         .ok()
-        .map(|output| crate::tools::format_exec_output_str(output, turn.truncation_policy))
+        .map(|output| {
+            crate::tools::format_exec_output_str(output, turn.model_info.truncation_policy.into())
+        })
         .map(JsonValue::String);
     let content = emitter
         .finish(event_ctx, out, /*applied_patch_delta*/ None)

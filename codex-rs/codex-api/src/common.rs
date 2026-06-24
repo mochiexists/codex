@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnModerationMetadataEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use futures::Stream;
 use serde::Deserialize;
@@ -27,7 +28,8 @@ pub struct CompactionInput<'a> {
     pub input: &'a [ResponseItem],
     #[serde(skip_serializing_if = "str::is_empty")]
     pub instructions: &'a str,
-    pub tools: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
     pub parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
@@ -71,6 +73,7 @@ pub struct MemorySummarizeOutput {
 #[derive(Debug)]
 pub enum ResponseEvent {
     Created,
+    SafetyBuffering(SafetyBuffering),
     OutputItemDone(ResponseItem),
     OutputItemAdded(ResponseItem),
     /// Emitted when the server includes `OpenAI-Model` on the stream response.
@@ -78,6 +81,8 @@ pub enum ResponseEvent {
     ServerModel(String),
     /// Emitted when the server recommends additional account verification.
     ModelVerifications(Vec<ModelVerification>),
+    /// Emitted when the server includes moderation metadata for first-party turn presentation.
+    TurnModerationMetadata(TurnModerationMetadataEvent),
     /// Emitted when `X-Reasoning-Included: true` is present on the response,
     /// meaning the server already accounted for past reasoning tokens and the
     /// client should not re-estimate them.
@@ -110,12 +115,46 @@ pub enum ResponseEvent {
     ModelsEtag(String),
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct SafetyBuffering {
+    pub use_cases: Vec<String>,
+    pub reasons: Vec<String>,
+    #[serde(skip)]
+    pub show_buffering_ui: bool,
+    #[serde(skip)]
+    pub faster_model: Option<String>,
+}
+
+impl SafetyBuffering {
+    pub(crate) fn with_treatment(mut self, treatment: &SafetyBufferingTreatment) -> Self {
+        self.show_buffering_ui = treatment.show_buffering_ui;
+        self.faster_model.clone_from(&treatment.faster_model);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SafetyBufferingTreatment {
+    pub show_buffering_ui: bool,
+    pub faster_model: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningContext {
+    Auto,
+    CurrentTurn,
+    AllTurns,
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct Reasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<ReasoningSummaryConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<ReasoningContext>,
 }
 
 #[derive(Debug, Serialize, Default, Clone, PartialEq)]
@@ -172,7 +211,8 @@ pub struct ResponsesApiRequest {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub instructions: String,
     pub input: Vec<ResponseItem>,
-    pub tools: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<serde_json::Value>>,
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
@@ -220,7 +260,8 @@ pub struct ResponseCreateWsRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
     pub input: Vec<ResponseItem>,
-    pub tools: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
@@ -237,11 +278,6 @@ pub struct ResponseCreateWsRequest {
     pub generate: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_metadata: Option<HashMap<String, String>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ResponseProcessedWsRequest {
-    pub response_id: String,
 }
 
 pub fn response_create_client_metadata(
@@ -272,8 +308,6 @@ pub fn response_create_client_metadata(
 pub enum ResponsesWsRequest {
     #[serde(rename = "response.create")]
     ResponseCreate(ResponseCreateWsRequest),
-    #[serde(rename = "response.processed")]
-    ResponseProcessed(ResponseProcessedWsRequest),
 }
 
 pub fn create_text_param_for_request(

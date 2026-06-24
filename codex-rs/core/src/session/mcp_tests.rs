@@ -30,13 +30,15 @@ fn form_request(meta: Option<Meta>) -> ElicitationReviewRequest {
     ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
         request_id: rmcp::model::NumberOrString::Number(7),
-        elicitation: CreateElicitationRequestParams::FormElicitationParams {
-            meta,
-            message: "Allow origin?".to_string(),
-            requested_schema: ElicitationSchema::builder()
-                .build()
-                .expect("schema should build"),
-        },
+        elicitation: Elicitation::Mcp(
+            rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+                meta,
+                message: "Allow origin?".to_string(),
+                requested_schema: ElicitationSchema::builder()
+                    .build()
+                    .expect("schema should build"),
+            },
+        ),
     }
 }
 
@@ -59,6 +61,7 @@ fn guardian_elicitation_review_request_builds_mcp_tool_call() {
         connector_id,
         connector_name,
         connector_description,
+        connected_account_email,
         tool_title,
         tool_description,
         annotations,
@@ -74,6 +77,7 @@ fn guardian_elicitation_review_request_builds_mcp_tool_call() {
     assert_eq!(connector_id.as_deref(), Some("browser-use"));
     assert_eq!(connector_name.as_deref(), Some("Browser Use"));
     assert_eq!(connector_description, None);
+    assert_eq!(connected_account_email, None);
     assert_eq!(tool_title.as_deref(), Some("Access browser origin"));
     assert_eq!(tool_description, None);
     assert_eq!(annotations, None);
@@ -97,6 +101,63 @@ fn guardian_elicitation_review_request_defaults_missing_tool_params() {
 }
 
 #[test]
+fn plugin_install_elicitation_telemetry_metadata_requires_install_tool_suggestion() {
+    let event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
+        turn_id: Some("turn-1".to_string()),
+        server_name: "codex_apps".to_string(),
+        id: codex_protocol::mcp::RequestId::String("request-1".to_string()),
+        request: codex_protocol::approvals::ElicitationRequest::Form {
+            meta: Some(json!({
+                "codex_approval_kind": "tool_suggestion",
+                "suggest_type": "install",
+                "tool_type": "plugin",
+                "tool_id": "slack@openai-curated",
+                "tool_name": "Slack",
+            })),
+            message: "Install Slack?".to_string(),
+            requested_schema: json!({
+                "type": "object",
+                "properties": {},
+            }),
+        },
+    });
+
+    assert_eq!(
+        plugin_install_elicitation_telemetry_metadata(&event),
+        Some(PluginInstallElicitationTelemetryMetadata {
+            tool_type: "plugin".to_string(),
+            tool_id: "slack@openai-curated".to_string(),
+            tool_name: "Slack".to_string(),
+        })
+    );
+
+    let enable_event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
+        turn_id: Some("turn-1".to_string()),
+        server_name: "codex_apps".to_string(),
+        id: codex_protocol::mcp::RequestId::String("request-2".to_string()),
+        request: codex_protocol::approvals::ElicitationRequest::Form {
+            meta: Some(json!({
+                "codex_approval_kind": "tool_suggestion",
+                "suggest_type": "enable",
+                "tool_type": "plugin",
+                "tool_id": "slack@openai-curated",
+                "tool_name": "Slack",
+            })),
+            message: "Enable Slack?".to_string(),
+            requested_schema: json!({
+                "type": "object",
+                "properties": {},
+            }),
+        },
+    });
+
+    assert_eq!(
+        plugin_install_elicitation_telemetry_metadata(&enable_event),
+        None
+    );
+}
+
+#[test]
 fn guardian_elicitation_review_request_requires_opt_in() {
     let request = form_request(meta(json!({
         "codex_approval_kind": "mcp_tool_call",
@@ -114,12 +175,14 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
     let url_request = ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
         request_id: rmcp::model::NumberOrString::Number(8),
-        elicitation: CreateElicitationRequestParams::UrlElicitationParams {
-            meta: guardian_meta(Some(json!({}))),
-            message: "Open URL".to_string(),
-            url: "https://example.com".to_string(),
-            elicitation_id: "elicit-1".to_string(),
-        },
+        elicitation: Elicitation::Mcp(
+            rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+                meta: guardian_meta(Some(json!({}))),
+                message: "Open URL".to_string(),
+                url: "https://example.com".to_string(),
+                elicitation_id: "elicit-1".to_string(),
+            },
+        ),
     };
     assert!(matches!(
         guardian_elicitation_review_request(&url_request),
@@ -129,14 +192,16 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
     let non_empty_schema_request = ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
         request_id: rmcp::model::NumberOrString::Number(9),
-        elicitation: CreateElicitationRequestParams::FormElicitationParams {
-            meta: guardian_meta(Some(json!({}))),
-            message: "Allow origin?".to_string(),
-            requested_schema: ElicitationSchema::builder()
-                .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
-                .build()
-                .expect("schema should build"),
-        },
+        elicitation: Elicitation::Mcp(
+            rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+                meta: guardian_meta(Some(json!({}))),
+                message: "Allow origin?".to_string(),
+                requested_schema: ElicitationSchema::builder()
+                    .required_property("confirmed", PrimitiveSchema::Boolean(BooleanSchema::new()))
+                    .build()
+                    .expect("schema should build"),
+            },
+        ),
     };
     assert!(matches!(
         guardian_elicitation_review_request(&non_empty_schema_request),

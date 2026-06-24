@@ -4,7 +4,8 @@ use std::sync::Arc;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
-use codex_rollout::EventPersistenceMode;
+use codex_rollout::RolloutPersistenceTelemetry;
+use codex_rollout::measure_and_filter_rollout_items;
 use codex_rollout::persisted_rollout_items;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -17,7 +18,6 @@ use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
-use crate::ThreadEventPersistenceMode;
 use crate::ThreadMetadataPatch;
 use crate::ThreadStore;
 use crate::ThreadStoreResult;
@@ -33,8 +33,8 @@ use crate::thread_metadata_sync::ThreadMetadataSync;
 pub struct LiveThread {
     thread_id: ThreadId,
     thread_store: Arc<dyn ThreadStore>,
-    event_persistence_mode: EventPersistenceMode,
     metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
+    persistence_telemetry: RolloutPersistenceTelemetry,
 }
 
 /// Owns a live thread while session initialization is still fallible.
@@ -92,26 +92,25 @@ impl LiveThread {
         params: CreateThreadParams,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let event_persistence_mode = event_persistence_mode(params.event_persistence_mode);
         let metadata_sync = ThreadMetadataSync::for_create(&params).await;
         thread_store.create_thread(params).await?;
         Ok(Self {
             thread_id,
             thread_store,
-            event_persistence_mode,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+            persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
         })
     }
 
     pub async fn resume(
         thread_store: Arc<dyn ThreadStore>,
-        mut params: ResumeThreadParams,
+        params: ResumeThreadParams,
     ) -> ThreadStoreResult<Self> {
         let thread_id = params.thread_id;
-        let event_persistence_mode = event_persistence_mode(params.event_persistence_mode);
         let should_load_history = params.history.is_none();
         let include_archived = params.include_archived;
-        thread_store.resume_thread(params.clone()).await?;
+        let mut metadata_sync = ThreadMetadataSync::for_resume(&params);
+        thread_store.resume_thread(params).await?;
         if should_load_history {
             match thread_store
                 .load_history(LoadThreadHistoryParams {
@@ -120,33 +119,53 @@ impl LiveThread {
                 })
                 .await
             {
-                Ok(history) => params.history = Some(history.items),
+                Ok(history) => metadata_sync.record_resume_history(&history.items),
                 Err(err) => {
-                    let _ = thread_store.discard_thread(thread_id).await;
+                    if let Err(discard_err) = thread_store.discard_thread(thread_id).await {
+                        warn!(
+                            "failed to discard thread persistence after resume history load failed: {discard_err}"
+                        );
+                    }
                     return Err(err);
                 }
             }
         }
-        let metadata_sync = ThreadMetadataSync::for_resume(&params);
         Ok(Self {
             thread_id,
             thread_store,
-            event_persistence_mode,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+            persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
         })
     }
 
+    #[tracing::instrument(
+        level = "trace",
+        skip_all,
+        fields(item_count = items.len())
+    )]
     pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
-        let canonical_items = persisted_rollout_items(items, self.event_persistence_mode);
-        if canonical_items.is_empty() {
+        // Empty appends are intentionally ignored rather than represented as zero-sized batches.
+        if items.is_empty() {
             return Ok(());
         }
+        let (canonical_items, measurement) = if self.persistence_telemetry.is_enabled() {
+            let (canonical_items, measurement) = measure_and_filter_rollout_items(items);
+            (canonical_items, Some(measurement))
+        } else {
+            (persisted_rollout_items(items), None)
+        };
         self.thread_store
             .append_items(AppendThreadItemsParams {
                 thread_id: self.thread_id,
-                items: canonical_items.clone(),
+                items: items.to_vec(),
             })
             .await?;
+        if let Some(measurement) = measurement.as_ref() {
+            self.persistence_telemetry.record_batch(items, measurement);
+        }
+        if canonical_items.is_empty() {
+            return Ok(());
+        }
         let update = self
             .metadata_sync
             .lock()
@@ -299,12 +318,5 @@ impl LiveThread {
             .await
             .mark_pending_update_applied(&update);
         Ok(())
-    }
-}
-
-fn event_persistence_mode(mode: ThreadEventPersistenceMode) -> EventPersistenceMode {
-    match mode {
-        ThreadEventPersistenceMode::Limited => EventPersistenceMode::Limited,
-        ThreadEventPersistenceMode::Extended => EventPersistenceMode::Extended,
     }
 }

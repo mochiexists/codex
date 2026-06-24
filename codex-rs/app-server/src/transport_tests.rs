@@ -2,9 +2,8 @@ use super::*;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::ThreadGoal;
-use codex_app_server_protocol::ThreadGoalStatus;
-use codex_app_server_protocol::ThreadGoalUpdatedNotification;
+use codex_app_server_protocol::ThreadRealtimeStartedNotification;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -15,20 +14,11 @@ fn absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
 }
 
-fn thread_goal_updated_notification() -> ServerNotification {
-    ServerNotification::ThreadGoalUpdated(ThreadGoalUpdatedNotification {
+fn thread_realtime_started_notification() -> ServerNotification {
+    ServerNotification::ThreadRealtimeStarted(ThreadRealtimeStartedNotification {
         thread_id: "thread-1".to_string(),
-        turn_id: None,
-        goal: ThreadGoal {
-            thread_id: "thread-1".to_string(),
-            objective: "ship goal mode".to_string(),
-            status: ThreadGoalStatus::Active,
-            token_budget: None,
-            tokens_used: 0,
-            time_used_seconds: 0,
-            created_at: 1,
-            updated_at: 1,
-        },
+        realtime_session_id: None,
+        version: RealtimeConversationVersion::V1,
     })
 }
 
@@ -182,7 +172,7 @@ async fn experimental_notifications_are_dropped_without_capability() {
         &mut connections,
         OutgoingEnvelope::ToConnection {
             connection_id,
-            message: OutgoingMessage::AppServerNotification(thread_goal_updated_notification()),
+            message: OutgoingMessage::AppServerNotification(thread_realtime_started_notification()),
             write_complete_tx: None,
         },
     )
@@ -215,7 +205,7 @@ async fn experimental_notifications_are_preserved_with_capability() {
         &mut connections,
         OutgoingEnvelope::ToConnection {
             connection_id,
-            message: OutgoingMessage::AppServerNotification(thread_goal_updated_notification()),
+            message: OutgoingMessage::AppServerNotification(thread_realtime_started_notification()),
             write_complete_tx: None,
         },
     )
@@ -227,7 +217,7 @@ async fn experimental_notifications_are_preserved_with_capability() {
         .expect("experimental notification should reach opted-in client");
     assert!(matches!(
         message.message,
-        OutgoingMessage::AppServerNotification(ServerNotification::ThreadGoalUpdated(_))
+        OutgoingMessage::AppServerNotification(ServerNotification::ThreadRealtimeStarted(_))
     ));
 }
 
@@ -260,17 +250,18 @@ async fn command_execution_request_approval_strips_additional_permissions_withou
                     item_id: "call_123".to_string(),
                     started_at_ms: 0,
                     approval_id: None,
+                    environment_id: None,
                     reason: Some("Need extra read access".to_string()),
                     network_approval_context: None,
                     command: Some("cat file".to_string()),
-                    cwd: Some(absolute_path("/tmp")),
+                    cwd: Some(absolute_path("/tmp").into()),
                     command_actions: None,
                     additional_permissions: Some(
                         codex_app_server_protocol::AdditionalPermissionProfile {
                             network: None,
                             file_system: Some(
                                 codex_app_server_protocol::AdditionalFileSystemPermissions {
-                                    read: Some(vec![absolute_path("/tmp/allowed")]),
+                                    read: Some(vec![absolute_path("/tmp/allowed").into()]),
                                     write: None,
                                     glob_scan_max_depth: None,
                                     entries: None,
@@ -325,17 +316,18 @@ async fn command_execution_request_approval_keeps_additional_permissions_with_ca
                     item_id: "call_123".to_string(),
                     started_at_ms: 0,
                     approval_id: None,
+                    environment_id: None,
                     reason: Some("Need extra read access".to_string()),
                     network_approval_context: None,
                     command: Some("cat file".to_string()),
-                    cwd: Some(absolute_path("/tmp")),
+                    cwd: Some(absolute_path("/tmp").into()),
                     command_actions: None,
                     additional_permissions: Some(
                         codex_app_server_protocol::AdditionalPermissionProfile {
                             network: None,
                             file_system: Some(
                                 codex_app_server_protocol::AdditionalFileSystemPermissions {
-                                    read: Some(vec![absolute_path("/tmp/allowed")]),
+                                    read: Some(vec![absolute_path("/tmp/allowed").into()]),
                                     write: None,
                                     glob_scan_max_depth: None,
                                     entries: None,

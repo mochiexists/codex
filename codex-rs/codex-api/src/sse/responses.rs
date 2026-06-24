@@ -1,64 +1,35 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
+use crate::common::SafetyBuffering;
+use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
 use crate::rate_limits::parse_all_rate_limits;
+use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
-use codex_client::TransportError;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnModerationMetadataEvent;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
-use futures::TryStreamExt;
 use serde::Deserialize;
 use serde_json::Value;
-use std::io::BufRead;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::time::timeout;
-use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
+const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
-
-/// Streams SSE events from an on-disk fixture for tests.
-pub fn stream_from_fixture(
-    path: impl AsRef<Path>,
-    idle_timeout: Duration,
-) -> Result<ResponseStream, ApiError> {
-    let file =
-        std::fs::File::open(path.as_ref()).map_err(|err| ApiError::Stream(err.to_string()))?;
-    let mut content = String::new();
-    for line in std::io::BufReader::new(file).lines() {
-        let line = line.map_err(|err| ApiError::Stream(err.to_string()))?;
-        content.push_str(&line);
-        content.push_str("\n\n");
-    }
-
-    let reader = std::io::Cursor::new(content);
-    let stream = ReaderStream::new(reader).map_err(|err| TransportError::Network(err.to_string()));
-    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
-    tokio::spawn(process_sse(
-        Box::pin(stream),
-        tx_event,
-        idle_timeout,
-        /*telemetry*/ None,
-    ));
-    Ok(ResponseStream {
-        rx_event,
-        upstream_request_id: None,
-    })
-}
 
 pub fn spawn_response_stream(
     stream_response: StreamResponse,
@@ -86,11 +57,13 @@ pub fn spawn_response_stream(
         .get(REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
+    let safety_buffering_treatment =
+        treatment_from_headers(&stream_response.headers).unwrap_or_default();
     if let Some(turn_state) = turn_state.as_ref()
         && let Some(header_value) = stream_response
             .headers
-            .get("x-codex-turn-state")
-            .and_then(|v| v.to_str().ok())
+            .get(X_CODEX_TURN_STATE_HEADER)
+            .and_then(|value| value.to_str().ok())
     {
         let _ = turn_state.set(header_value.to_string());
     }
@@ -110,7 +83,14 @@ pub fn spawn_response_stream(
                 .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
                 .await;
         }
-        process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
+        process_sse_with_treatment(
+            stream_response.bytes,
+            tx_event,
+            idle_timeout,
+            telemetry,
+            safety_buffering_treatment,
+        )
+        .await;
     });
 
     ResponseStream {
@@ -180,7 +160,7 @@ struct ResponseCompletedOutputTokensDetails {
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
-    headers: Option<Value>,
+    pub(crate) headers: Option<Value>,
     metadata: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
@@ -189,6 +169,7 @@ pub struct ResponsesStreamEvent {
     delta: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
+    safety_buffering: Option<Value>,
 }
 
 impl ResponsesStreamEvent {
@@ -217,6 +198,16 @@ impl ResponsesStreamEvent {
         }
     }
 
+    pub(crate) fn turn_state(&self) -> Option<String> {
+        if self.kind() != "response.metadata" {
+            return None;
+        }
+
+        self.headers
+            .as_ref()
+            .and_then(header_turn_state_value_from_json)
+    }
+
     pub(crate) fn model_verifications(&self) -> Option<Vec<ModelVerification>> {
         if self.kind() != "response.metadata" {
             return None;
@@ -227,6 +218,22 @@ impl ResponsesStreamEvent {
             .and_then(|metadata| metadata.get("openai_verification_recommendation"))
             .and_then(model_verifications_from_json_value)
     }
+
+    pub(crate) fn turn_moderation_metadata(&self) -> Option<TurnModerationMetadataEvent> {
+        if self.kind() != "response.metadata" {
+            return None;
+        }
+
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("openai_chatgpt_moderation_metadata"))
+            .cloned()
+            .map(|metadata| TurnModerationMetadataEvent { metadata })
+    }
+
+    pub(crate) fn safety_buffering(&self) -> Option<SafetyBuffering> {
+        serde_json::from_value(self.safety_buffering.as_ref()?.clone()).ok()
+    }
 }
 
 fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
@@ -234,6 +241,17 @@ fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
     headers.iter().find_map(|(name, value)| {
         if name.eq_ignore_ascii_case("openai-model") || name.eq_ignore_ascii_case("x-openai-model")
         {
+            json_value_as_string(value)
+        } else {
+            None
+        }
+    })
+}
+
+fn header_turn_state_value_from_json(value: &Value) -> Option<String> {
+    let headers = value.as_object()?;
+    headers.iter().find_map(|(name, value)| {
+        if name.eq_ignore_ascii_case(X_CODEX_TURN_STATE_HEADER) {
             json_value_as_string(value)
         } else {
             None
@@ -430,11 +448,29 @@ pub fn process_responses_event(
     Ok(None)
 }
 
+#[cfg(test)]
 pub async fn process_sse(
     stream: ByteStream,
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+) {
+    process_sse_with_treatment(
+        stream,
+        tx_event,
+        idle_timeout,
+        telemetry,
+        SafetyBufferingTreatment::default(),
+    )
+    .await;
+}
+
+async fn process_sse_with_treatment(
+    stream: ByteStream,
+    tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    idle_timeout: Duration,
+    telemetry: Option<Arc<dyn SseTelemetry>>,
+    safety_buffering_treatment: SafetyBufferingTreatment,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
@@ -478,6 +514,10 @@ pub async fn process_sse(
             }
         };
         let model_verifications = event.model_verifications();
+        let turn_moderation_metadata = event.turn_moderation_metadata();
+        let safety_buffering = event
+            .safety_buffering()
+            .map(|buffering| buffering.with_treatment(&safety_buffering_treatment));
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -494,6 +534,22 @@ pub async fn process_sse(
         if let Some(verifications) = model_verifications
             && tx_event
                 .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+                .await
+                .is_err()
+        {
+            return;
+        }
+        if let Some(metadata) = turn_moderation_metadata
+            && tx_event
+                .send(Ok(ResponseEvent::TurnModerationMetadata(metadata)))
+                .await
+                .is_err()
+        {
+            return;
+        }
+        if let Some(buffering) = safety_buffering
+            && tx_event
+                .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
                 .await
                 .is_err()
         {
@@ -593,8 +649,10 @@ mod tests {
     use assert_matches::assert_matches;
     use bytes::Bytes;
     use codex_client::StreamResponse;
+    use codex_client::TransportError;
     use codex_protocol::models::MessagePhase;
     use codex_protocol::models::ResponseItem;
+    use futures::TryStreamExt;
     use futures::stream;
     use http::HeaderMap;
     use http::HeaderValue;
@@ -603,6 +661,7 @@ mod tests {
     use serde_json::json;
     use tokio::sync::mpsc;
     use tokio_test::io::Builder as IoBuilder;
+    use tokio_util::io::ReaderStream;
 
     async fn collect_events(chunks: &[&[u8]]) -> Vec<Result<ResponseEvent, ApiError>> {
         let mut builder = IoBuilder::new();
@@ -1244,6 +1303,99 @@ mod tests {
                 end_turn: None,
             } if response_id == "resp-1"
         );
+    }
+
+    #[tokio::test]
+    async fn process_sse_emits_turn_moderation_metadata_field() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.metadata",
+                "metadata": {
+                    "openai_chatgpt_moderation_metadata": {
+                        "presentation": "inline"
+                    }
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp-1"
+                }
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::TurnModerationMetadata(result)
+                if result.metadata == json!({"presentation": "inline"})
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::Completed {
+                response_id,
+                token_usage: None,
+                end_turn: None,
+            } if response_id == "resp-1"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_sse_emits_all_safety_buffering_notifications_without_dropping_response_events()
+    {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.created",
+                "response": { "id": "resp-1" },
+                "safety_buffering": false
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "delta": "hello",
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"]
+                }
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "delta": " world",
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"]
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp-1" },
+                "safety_buffering": {
+                    "use_cases": ["cyber"],
+                    "reasons": ["user_risk"]
+                }
+            }),
+        ])
+        .await;
+
+        assert_eq!(events.len(), 7);
+        assert_matches!(&events[0], ResponseEvent::Created);
+        assert_matches!(
+            &events[1],
+            ResponseEvent::SafetyBuffering(buffering)
+                if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
+        );
+        assert_matches!(&events[2], ResponseEvent::OutputTextDelta(delta) if delta == "hello");
+        assert_matches!(
+            &events[3],
+            ResponseEvent::SafetyBuffering(buffering)
+                if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
+        );
+        assert_matches!(&events[4], ResponseEvent::OutputTextDelta(delta) if delta == " world");
+        assert_matches!(
+            &events[5],
+            ResponseEvent::SafetyBuffering(buffering)
+                if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
+        );
+        assert_matches!(&events[6], ResponseEvent::Completed { response_id, .. } if response_id == "resp-1");
     }
 
     #[test]

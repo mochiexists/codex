@@ -6,9 +6,12 @@
 use super::*;
 use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
+use crate::chatwidget::limit_label_for_window;
+use crate::chatwidget::rate_limits::get_limits_duration;
 use crate::legacy_core::config::Config;
 use crate::status::format_tokens_compact;
 use codex_app_server_protocol::AskForApproval;
+use codex_config::ConfigLayerSource;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
@@ -62,6 +65,11 @@ impl StatusSurfaceSelections {
             || self
                 .status_line_items
                 .contains(&StatusLineItem::BranchChanges)
+    }
+
+    fn uses_workspace_headline(&self) -> bool {
+        self.status_line_items
+            .contains(&StatusLineItem::WorkspaceHeadline)
     }
 }
 
@@ -154,6 +162,15 @@ impl ChatWidget {
             if !self.status_line_git_summary_lookup_complete {
                 self.request_status_line_git_summary(cwd);
             }
+        }
+
+        if !selections.uses_workspace_headline() {
+            self.status_line_workspace_headline = None;
+            self.status_line_workspace_headline_pending_request_id = None;
+            self.status_line_workspace_headline_last_requested_at = None;
+            self.status_line_workspace_messages_disabled = false;
+        } else {
+            self.request_status_line_workspace_headline_if_due(Instant::now());
         }
     }
 
@@ -551,6 +568,85 @@ impl ChatWidget {
         });
     }
 
+    fn request_status_line_workspace_headline_if_due(&mut self, now: Instant) {
+        if !self.status_line_workspace_headline_should_fetch(now) {
+            return;
+        }
+        let request_id = self.next_status_line_workspace_headline_request_id;
+        self.next_status_line_workspace_headline_request_id = self
+            .next_status_line_workspace_headline_request_id
+            .wrapping_add(/*rhs*/ 1);
+        self.status_line_workspace_headline_pending_request_id = Some(request_id);
+        self.status_line_workspace_headline_last_requested_at = Some(now);
+        self.app_event_tx
+            .send(AppEvent::RefreshStatusLineWorkspaceHeadline { request_id });
+    }
+
+    fn status_line_workspace_headline_should_fetch(&self, now: Instant) -> bool {
+        if self
+            .status_line_workspace_headline_pending_request_id
+            .is_some()
+            || self.status_line_workspace_messages_disabled
+            || !self.has_codex_backend_auth
+        {
+            return false;
+        }
+
+        self.status_line_workspace_headline_last_requested_at
+            .is_none_or(|last_requested_at| {
+                now.saturating_duration_since(last_requested_at)
+                    >= crate::workspace_messages::WORKSPACE_HEADLINE_REFRESH_INTERVAL
+            })
+    }
+
+    pub(super) fn refresh_status_line_if_workspace_headline_due(&mut self) {
+        let now = Instant::now();
+        if self.status_line_workspace_headline_should_fetch(now)
+            && self
+                .status_line_items_with_invalids()
+                .0
+                .contains(&StatusLineItem::WorkspaceHeadline)
+        {
+            self.refresh_status_line();
+        }
+    }
+
+    pub(crate) fn set_status_line_workspace_headline(
+        &mut self,
+        request_id: u64,
+        result: Result<crate::workspace_messages::WorkspaceHeadlineFetchResult, String>,
+    ) -> bool {
+        if self.status_line_workspace_headline_pending_request_id != Some(request_id) {
+            return false;
+        }
+        self.status_line_workspace_headline_pending_request_id = None;
+        match result {
+            Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(headline)) => {
+                self.status_line_workspace_messages_disabled = false;
+                self.status_line_workspace_headline = headline;
+            }
+            Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled) => {
+                self.status_line_workspace_messages_disabled = true;
+                self.status_line_workspace_headline = None;
+            }
+            Err(err) => {
+                tracing::debug!(error = %err, "failed to fetch workspace headline");
+            }
+        }
+
+        if !self.status_line_workspace_messages_disabled
+            && self
+                .status_line_items_with_invalids()
+                .0
+                .contains(&StatusLineItem::WorkspaceHeadline)
+        {
+            self.frame_requester
+                .schedule_frame_in(crate::workspace_messages::WORKSPACE_HEADLINE_REFRESH_INTERVAL);
+        }
+        self.refresh_status_line();
+        true
+    }
+
     /// Resolves a display string for one configured status-line item.
     ///
     /// Returning `None` means "omit this item for now", not "configuration error". Callers rely on
@@ -560,6 +656,7 @@ impl ChatWidget {
         match item {
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
+            StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),
@@ -603,26 +700,20 @@ impl ChatWidget {
                 .status_line_context_used_percent()
                 .map(|used| format!("Context {used}% used")),
             StatusLineItem::FiveHourLimit => {
-                let window = self
+                let (window, is_secondary) = self
                     .rate_limit_snapshots_by_limit_id
                     .get("codex")
-                    .and_then(|s| s.primary.as_ref());
-                let label = window
-                    .and_then(|window| window.window_minutes)
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string());
-                self.status_line_limit_display(window, &label)
+                    .and_then(five_hour_status_window)?;
+                let label = limit_label_for_window(window.window_minutes, is_secondary);
+                self.status_line_limit_display(Some(window), &label)
             }
             StatusLineItem::WeeklyLimit => {
-                let window = self
+                let (window, is_secondary) = self
                     .rate_limit_snapshots_by_limit_id
                     .get("codex")
-                    .and_then(|s| s.secondary.as_ref());
-                let label = window
-                    .and_then(|window| window.window_minutes)
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string());
-                self.status_line_limit_display(window, &label)
+                    .and_then(weekly_status_window)?;
+                let label = limit_label_for_window(window.window_minutes, is_secondary);
+                self.status_line_limit_display(Some(window), &label)
             }
             StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
             StatusLineItem::ContextWindowSize => self
@@ -656,6 +747,7 @@ impl ChatWidget {
                     }
                 },
             ),
+            StatusLineItem::WorkspaceHeadline => self.status_line_workspace_headline.clone(),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
         }
     }
@@ -696,8 +788,10 @@ impl ChatWidget {
             StatusSurfacePreviewItem::SessionId => StatusLineItem::SessionId,
             StatusSurfacePreviewItem::FastMode => StatusLineItem::FastMode,
             StatusSurfacePreviewItem::RawOutput => StatusLineItem::RawOutput,
+            StatusSurfacePreviewItem::WorkspaceHeadline => StatusLineItem::WorkspaceHeadline,
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
+            StatusSurfacePreviewItem::Reasoning => StatusLineItem::Reasoning,
         };
         self.status_line_value_for_item(status_line_item)
     }
@@ -763,12 +857,21 @@ impl ChatWidget {
                 self.model_with_reasoning_display_name(),
                 /*max_chars*/ 32,
             )),
+            TerminalTitleItem::Reasoning => Some(Self::truncate_terminal_title_part(
+                self.reasoning_display_name(),
+                /*max_chars*/ 32,
+            )),
             TerminalTitleItem::TaskProgress => self.terminal_title_task_progress(),
         }
     }
 
+    fn reasoning_display_name(&self) -> String {
+        let effort = self.effective_reasoning_effort();
+        Self::status_line_reasoning_effort_label(effort.as_ref())
+    }
+
     fn model_with_reasoning_display_name(&self) -> String {
-        let label = Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
+        let label = self.reasoning_display_name();
         let service_tier_label = self
             .current_service_tier()
             .and_then(|service_tier| {
@@ -893,6 +996,102 @@ impl ChatWidget {
     }
 }
 
+fn five_hour_status_window(
+    snapshot: &RateLimitSnapshotDisplay,
+) -> Option<(&RateLimitWindowDisplay, bool)> {
+    find_primary_codex_window(snapshot, "5h")
+        .or_else(|| secondary_window_with_label_when_weekly_is_available(snapshot, "5h"))
+        .or_else(|| non_weekly_primary_window(snapshot))
+        .or_else(|| non_weekly_secondary_window_when_primary_is_weekly(snapshot))
+}
+
+fn weekly_status_window(
+    snapshot: &RateLimitSnapshotDisplay,
+) -> Option<(&RateLimitWindowDisplay, bool)> {
+    find_codex_window(snapshot, "weekly")
+        .or_else(|| snapshot.secondary.as_ref().map(|window| (window, true)))
+}
+
+fn find_codex_window<'a>(
+    snapshot: &'a RateLimitSnapshotDisplay,
+    label: &str,
+) -> Option<(&'a RateLimitWindowDisplay, bool)> {
+    if let Some(primary) = snapshot.primary.as_ref()
+        && matches_window_label(primary, label)
+    {
+        return Some((primary, false));
+    }
+
+    if let Some(secondary) = snapshot.secondary.as_ref()
+        && matches_window_label(secondary, label)
+    {
+        return Some((secondary, true));
+    }
+
+    None
+}
+
+fn find_primary_codex_window<'a>(
+    snapshot: &'a RateLimitSnapshotDisplay,
+    label: &str,
+) -> Option<(&'a RateLimitWindowDisplay, bool)> {
+    let primary = snapshot.primary.as_ref()?;
+    if matches_window_label(primary, label) {
+        Some((primary, false))
+    } else {
+        None
+    }
+}
+
+fn secondary_window_with_label_when_weekly_is_available<'a>(
+    snapshot: &'a RateLimitSnapshotDisplay,
+    label: &str,
+) -> Option<(&'a RateLimitWindowDisplay, bool)> {
+    find_codex_window(snapshot, "weekly")?;
+
+    let secondary = snapshot.secondary.as_ref()?;
+    if matches_window_label(secondary, label) {
+        Some((secondary, true))
+    } else {
+        None
+    }
+}
+
+fn non_weekly_primary_window(
+    snapshot: &RateLimitSnapshotDisplay,
+) -> Option<(&RateLimitWindowDisplay, bool)> {
+    let primary = snapshot.primary.as_ref()?;
+    if matches_window_label(primary, "weekly") {
+        None
+    } else {
+        Some((primary, false))
+    }
+}
+
+fn non_weekly_secondary_window_when_primary_is_weekly(
+    snapshot: &RateLimitSnapshotDisplay,
+) -> Option<(&RateLimitWindowDisplay, bool)> {
+    let primary = snapshot.primary.as_ref()?;
+    if !matches_window_label(primary, "weekly") {
+        return None;
+    }
+
+    let secondary = snapshot.secondary.as_ref()?;
+    if matches_window_label(secondary, "weekly") {
+        None
+    } else {
+        Some((secondary, true))
+    }
+}
+
+fn matches_window_label(window: &RateLimitWindowDisplay, label: &str) -> bool {
+    window
+        .window_minutes
+        .and_then(get_limits_duration)
+        .as_deref()
+        == Some(label)
+}
+
 fn permissions_display(config: &Config) -> String {
     let active_permission_profile = config.permissions.active_permission_profile();
     if let Some(active_permission_profile) = active_permission_profile.as_ref()
@@ -901,8 +1100,10 @@ fn permissions_display(config: &Config) -> String {
         return active_permission_profile.id.clone();
     }
 
-    let permission_profile = config.permissions.permission_profile();
-    let summary = summarize_permission_profile(&permission_profile, config.cwd.as_path());
+    let permission_profile = config.permissions.effective_permission_profile();
+    let workspace_roots = config.effective_workspace_roots();
+    let summary =
+        summarize_permission_profile(&permission_profile, &config.cwd, workspace_roots.as_slice());
     if let Some(details) = summary.strip_prefix("read-only")
         && !details.contains("(network access enabled)")
     {
@@ -922,13 +1123,14 @@ fn permissions_display(config: &Config) -> String {
 
 fn approval_mode_display(config: &Config) -> String {
     let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
-    if approval_policy == AskForApproval::OnRequest
-        && config.approvals_reviewer == ApprovalsReviewer::AutoReview
-    {
-        "auto-review".to_string()
-    } else {
-        config.permissions.approval_policy.value().to_string()
+    if approval_policy == AskForApproval::OnRequest {
+        return match config.approvals_reviewer {
+            ApprovalsReviewer::AutoReview => "Approve for me".to_string(),
+            ApprovalsReviewer::User => "Ask for approval".to_string(),
+        };
     }
+
+    config.permissions.approval_policy.value().to_string()
 }
 
 fn parse_items_with_invalids<T>(ids: impl IntoIterator<Item = String>) -> (Vec<T>, Vec<String>)

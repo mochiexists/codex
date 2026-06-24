@@ -1,4 +1,8 @@
 use super::*;
+#[cfg(target_os = "windows")]
+use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
+
+const MAX_FEEDBACK_TREE_THREADS: usize = 8;
 
 #[derive(Clone)]
 pub(crate) struct FeedbackRequestProcessor {
@@ -56,6 +60,7 @@ impl FeedbackRequestProcessor {
             extra_log_files,
             tags,
         } = params;
+        let mut upload_tags = tags.unwrap_or_default();
 
         let conversation_id = match thread_id.as_deref() {
             Some(thread_id) => match ThreadId::from_string(thread_id) {
@@ -122,6 +127,27 @@ impl FeedbackRequestProcessor {
                 },
                 None => Vec::new(),
             };
+            let mut feedback_thread_ids = feedback_thread_ids;
+            let original_len = feedback_thread_ids.len();
+            if let Some(conversation_id) = conversation_id {
+                let mut descendant_thread_ids = feedback_thread_ids
+                    .into_iter()
+                    .filter(|thread_id| *thread_id != conversation_id)
+                    .collect::<Vec<_>>();
+                // Thread ids are UUIDv7, so lexicographic order tracks creation time.
+                descendant_thread_ids.sort_unstable_by_key(ToString::to_string);
+                if original_len > MAX_FEEDBACK_TREE_THREADS {
+                    let keep_descendants = MAX_FEEDBACK_TREE_THREADS.saturating_sub(1);
+                    let split_index = descendant_thread_ids.len().saturating_sub(keep_descendants);
+                    descendant_thread_ids = descendant_thread_ids.split_off(split_index);
+                    warn!(
+                        "feedback log upload for thread_id={conversation_id:?} truncated from {original_len} threads to root plus {keep_descendants} most recent descendants"
+                    );
+                }
+                feedback_thread_ids = Vec::with_capacity(descendant_thread_ids.len() + 1);
+                feedback_thread_ids.push(conversation_id);
+                feedback_thread_ids.extend(descendant_thread_ids);
+            }
             let sqlite_feedback_logs = if let Some(state_db_ctx) = state_db_ctx.as_ref()
                 && !feedback_thread_ids.is_empty()
             {
@@ -185,6 +211,12 @@ impl FeedbackRequestProcessor {
                     )),
                 });
             }
+            if let Some(sandbox_log_attachment) =
+                windows_sandbox_log_attachment(&self.config.codex_home)
+                && seen_attachment_paths.insert(sandbox_log_attachment.path.clone())
+            {
+                attachment_paths.push(sandbox_log_attachment);
+            }
         }
         if let Some(extra_log_files) = extra_log_files {
             for extra_log_file in extra_log_files {
@@ -197,14 +229,27 @@ impl FeedbackRequestProcessor {
             }
         }
 
+        let mut extra_attachments = Vec::new();
+        if include_logs
+            && let Some(doctor_report) =
+                super::feedback_doctor_report::doctor_feedback_report(&self.config).await
+        {
+            extra_attachments.push(doctor_report.attachment);
+            for (key, value) in doctor_report.tags {
+                upload_tags.entry(key).or_insert(value);
+            }
+        }
+
         let session_source = self.thread_manager.session_source();
 
         let upload_result = tokio::task::spawn_blocking(move || {
+            let tags = (!upload_tags.is_empty()).then_some(&upload_tags);
             snapshot.upload_feedback(FeedbackUploadOptions {
                 classification: &classification,
                 reason: reason.as_deref(),
-                tags: tags.as_ref(),
+                tags,
                 include_logs,
+                extra_attachments: &extra_attachments,
                 extra_attachment_paths: &attachment_paths,
                 session_source: Some(session_source),
                 logs_override: sqlite_feedback_logs,
@@ -249,4 +294,47 @@ impl FeedbackRequestProcessor {
 
 fn auto_review_rollout_filename(thread_id: ThreadId) -> String {
     format!("auto-review-rollout-{thread_id}.jsonl")
+}
+
+#[cfg(target_os = "windows")]
+fn windows_sandbox_log_attachment(codex_home: &Path) -> Option<FeedbackAttachmentPath> {
+    let sandbox_log_path = codex_windows_sandbox::current_log_file_path_for_codex_home(codex_home);
+    sandbox_log_path
+        .is_file()
+        .then_some(FeedbackAttachmentPath {
+            path: sandbox_log_path,
+            attachment_filename_override: Some(WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME.to_string()),
+        })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn windows_sandbox_log_attachment(_codex_home: &Path) -> Option<FeedbackAttachmentPath> {
+    None
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn windows_sandbox_log_attachment_uses_current_log() {
+        let codex_home = tempfile::tempdir().expect("create tempdir");
+        let sandbox_dir = codex_windows_sandbox::sandbox_dir(codex_home.path());
+        std::fs::create_dir_all(&sandbox_dir).expect("create sandbox dir");
+        let sandbox_log_path =
+            codex_windows_sandbox::current_log_file_path_for_codex_home(codex_home.path());
+        std::fs::write(&sandbox_log_path, "sandbox log").expect("write sandbox log");
+
+        let attachment = windows_sandbox_log_attachment(codex_home.path())
+            .map(|attachment| (attachment.path, attachment.attachment_filename_override));
+
+        assert_eq!(
+            attachment,
+            Some((
+                sandbox_log_path,
+                Some(WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME.to_string())
+            ))
+        );
+    }
 }

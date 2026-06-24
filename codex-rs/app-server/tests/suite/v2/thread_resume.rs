@@ -2326,6 +2326,7 @@ async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
             thread_id: thread_id.clone(),
+            reason: None,
         })
         .await?;
     timeout(

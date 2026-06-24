@@ -19,6 +19,8 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::thread_unsubscribe::ThreadUnsubscribeOutcome;
+use crate::events::thread_unsubscribe::ThreadUnsubscribeRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::types::Hook;
@@ -140,6 +142,20 @@ impl Hooks {
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         self.engine.run_session_start(request, turn_id).await
+    }
+
+    pub fn preview_thread_unsubscribe(
+        &self,
+        request: &ThreadUnsubscribeRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_thread_unsubscribe(request)
+    }
+
+    pub async fn run_thread_unsubscribe(
+        &self,
+        request: ThreadUnsubscribeRequest,
+    ) -> ThreadUnsubscribeOutcome {
+        self.engine.run_thread_unsubscribe(request).await
     }
 
     pub async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {

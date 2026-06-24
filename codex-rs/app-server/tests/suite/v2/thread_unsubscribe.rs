@@ -50,6 +50,7 @@ async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<(
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
             thread_id: thread_id.clone(),
+            reason: None,
         })
         .await?;
     let unsubscribe_resp: JSONRPCResponse = timeout(
@@ -205,6 +206,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
             thread_id: thread_id.clone(),
+            reason: None,
         })
         .await?;
     let unsubscribe_resp: JSONRPCResponse = timeout(
@@ -298,6 +300,7 @@ async fn thread_unsubscribe_preserves_cached_status_before_idle_unload() -> Resu
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
             thread_id: thread_id.clone(),
+            reason: None,
         })
         .await?;
     let unsubscribe_resp: JSONRPCResponse = timeout(
@@ -348,6 +351,7 @@ async fn thread_unsubscribe_reports_not_subscribed_before_idle_unload() -> Resul
     let first_unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
             thread_id: thread_id.clone(),
+            reason: None,
         })
         .await?;
     let first_unsubscribe_resp: JSONRPCResponse = timeout(
@@ -362,7 +366,10 @@ async fn thread_unsubscribe_reports_not_subscribed_before_idle_unload() -> Resul
     );
 
     let second_unsubscribe_id = mcp
-        .send_thread_unsubscribe_request(ThreadUnsubscribeParams { thread_id })
+        .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
+            thread_id,
+            reason: None,
+        })
         .await?;
     let second_unsubscribe_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,

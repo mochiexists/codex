@@ -423,6 +423,9 @@ pub struct ManagedHooksRequirements {
     #[serde(rename = "SessionStart")]
     #[ts(rename = "SessionStart")]
     pub session_start: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "ThreadUnsubscribe")]
+    #[ts(rename = "ThreadUnsubscribe")]
+    pub thread_unsubscribe: Vec<ConfiguredHookMatcherGroup>,
     #[serde(rename = "UserPromptSubmit")]
     #[ts(rename = "UserPromptSubmit")]
     pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,

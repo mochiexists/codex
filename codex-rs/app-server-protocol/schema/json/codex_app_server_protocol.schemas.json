@@ -10763,6 +10763,7 @@
           "preCompact",
           "postCompact",
           "sessionStart",
+          "threadUnsubscribe",
           "userPromptSubmit",
           "subagentStart",
           "subagentStop",
@@ -11692,6 +11693,12 @@
             },
             "type": "array"
           },
+          "ThreadUnsubscribe": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
           "UserPromptSubmit": {
             "items": {
               "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
@@ -11721,6 +11728,7 @@
           "Stop",
           "SubagentStart",
           "SubagentStop",
+          "ThreadUnsubscribe",
           "UserPromptSubmit"
         ],
         "type": "object"
@@ -19561,6 +19569,16 @@
       "ThreadUnsubscribeParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadUnsubscribeReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "threadId": {
             "type": "string"
           }
@@ -19570,6 +19588,14 @@
         ],
         "title": "ThreadUnsubscribeParams",
         "type": "object"
+      },
+      "ThreadUnsubscribeReason": {
+        "enum": [
+          "userRequested",
+          "threadSwitch",
+          "programmatic"
+        ],
+        "type": "string"
       },
       "ThreadUnsubscribeResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",

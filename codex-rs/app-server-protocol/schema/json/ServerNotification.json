@@ -1987,6 +1987,7 @@
         "preCompact",
         "postCompact",
         "sessionStart",
+        "threadUnsubscribe",
         "userPromptSubmit",
         "subagentStart",
         "subagentStop",

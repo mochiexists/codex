@@ -329,6 +329,12 @@
           },
           "type": "array"
         },
+        "ThreadUnsubscribe": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -358,6 +364,7 @@
         "Stop",
         "SubagentStart",
         "SubagentStop",
+        "ThreadUnsubscribe",
         "UserPromptSubmit"
       ],
       "type": "object"

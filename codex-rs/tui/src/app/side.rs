@@ -371,7 +371,13 @@ impl App {
             self.chat_widget.add_error_message(message);
             return false;
         }
-        if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+        if let Err(err) = app_server
+            .thread_unsubscribe(
+                thread_id,
+                codex_app_server_protocol::ThreadUnsubscribeReason::ThreadSwitch,
+            )
+            .await
+        {
             let message =
                 format!("Failed to close side conversation {thread_id}; it is still open: {err}");
             tracing::warn!("{message}");

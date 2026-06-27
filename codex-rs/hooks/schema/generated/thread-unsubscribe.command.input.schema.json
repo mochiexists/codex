@@ -38,6 +38,14 @@
       ],
       "type": "string"
     },
+    "resume_id": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/NullableString"
+        }
+      ],
+      "description": "The resumable conversation id (the id embedded in the live rollout filename), or null when this thread has no rollout and is therefore not resumable. Consumers building a `codex resume <id>` command MUST use this field — `thread_id`/`session_id` may be a transient side/child/stale thread that `codex resume` cannot find."
+    },
     "session_id": {
       "type": "string"
     },
@@ -54,6 +62,7 @@
     "model",
     "permission_mode",
     "reason",
+    "resume_id",
     "session_id",
     "thread_id",
     "transcript_path"

@@ -3877,13 +3877,25 @@ impl Session {
                 permission_mode,
             )
         };
+        // The resumable id is the conversation id embedded in the live rollout
+        // filename — NOT thread_id/session_id, which can be a transient
+        // side/child/stale-startup thread that `codex resume` cannot find (or
+        // that has no rollout at all). Derive it from the same rollout path we
+        // report as transcript_path; when there is no rollout, resume_id is None
+        // and the consumer must skip building a resume command.
+        // (resumable_id_from_rollout_path is a module-level fn so it is unit-tested.)
+        let transcript_path = self.hook_transcript_path().await;
+        let resume_id = transcript_path
+            .as_deref()
+            .and_then(resumable_id_from_rollout_path);
         let request = codex_hooks::ThreadUnsubscribeRequest {
             session_id: self.session_id().into(),
             cwd,
-            transcript_path: self.hook_transcript_path().await,
+            transcript_path,
             model,
             permission_mode,
             thread_id: self.thread_id(),
+            resume_id,
             reason,
         };
         let hooks = self.hooks();
@@ -4011,5 +4023,59 @@ async fn build_hooks_for_config(
     })
 }
 
+/// Parse the resumable conversation id from a rollout file path. The rollout
+/// filename is `rollout-<ts>-<uuid>.jsonl[.zst]`, where `<uuid>` is the id that
+/// `codex resume` resolves. Returns None for non-rollout paths (e.g. a thread
+/// with no materialized rollout, which is therefore not resumable).
+pub(crate) fn resumable_id_from_rollout_path(path: &std::path::Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let core = name.strip_prefix("rollout-")?;
+    let core = core
+        .strip_suffix(".jsonl")
+        .or_else(|| core.strip_suffix(".jsonl.zst"))
+        .unwrap_or(core);
+    core.match_indices('-')
+        .rev()
+        .find_map(|(i, _)| Uuid::parse_str(&core[i + 1..]).ok())
+        .map(|uuid| uuid.to_string())
+}
+
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod resume_id_parse_tests {
+    use super::resumable_id_from_rollout_path;
+    use std::path::Path;
+
+    #[test]
+    fn parses_uuid_from_rollout_filename() {
+        let p = Path::new(
+            "/u/.codex/sessions/2026/06/27/rollout-2026-06-27T16-08-36-019f09a0-1f43-7762-9a8e-c241641045ff.jsonl",
+        );
+        assert_eq!(
+            resumable_id_from_rollout_path(p).as_deref(),
+            Some("019f09a0-1f43-7762-9a8e-c241641045ff"),
+        );
+    }
+
+    #[test]
+    fn parses_compressed_rollout_filename() {
+        let p = Path::new(
+            "rollout-2026-06-27T16-08-36-019f09a0-1f43-7762-9a8e-c241641045ff.jsonl.zst",
+        );
+        assert_eq!(
+            resumable_id_from_rollout_path(p).as_deref(),
+            Some("019f09a0-1f43-7762-9a8e-c241641045ff"),
+        );
+    }
+
+    #[test]
+    fn rejects_non_rollout_paths() {
+        assert_eq!(resumable_id_from_rollout_path(Path::new("/tmp/notes.txt")), None);
+        assert_eq!(
+            resumable_id_from_rollout_path(Path::new("rollout-without-a-uuid.jsonl")),
+            None,
+        );
+    }
+}

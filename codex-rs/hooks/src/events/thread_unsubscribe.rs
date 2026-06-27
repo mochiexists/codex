@@ -26,6 +26,9 @@ pub struct ThreadUnsubscribeRequest {
     pub model: String,
     pub permission_mode: String,
     pub thread_id: ThreadId,
+    /// Resumable conversation id derived from the live rollout (None when the
+    /// thread has no rollout and cannot be resumed). See ThreadUnsubscribeCommandInput.
+    pub resume_id: Option<String>,
     pub reason: ThreadUnsubscribeReason,
 }
 
@@ -74,6 +77,7 @@ pub(crate) async fn run(
         request.model.clone(),
         request.permission_mode.clone(),
         request.thread_id,
+        request.resume_id.clone(),
         thread_unsubscribe_reason_label(request.reason),
     )) {
         Ok(input_json) => input_json,

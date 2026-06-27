@@ -560,6 +560,12 @@ pub(crate) struct ThreadUnsubscribeCommandInput {
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
     pub thread_id: String,
+    /// The resumable conversation id (the id embedded in the live rollout
+    /// filename), or null when this thread has no rollout and is therefore not
+    /// resumable. Consumers building a `codex resume <id>` command MUST use this
+    /// field — `thread_id`/`session_id` may be a transient side/child/stale
+    /// thread that `codex resume` cannot find.
+    pub resume_id: NullableString,
     #[schemars(schema_with = "thread_unsubscribe_reason_schema")]
     pub reason: String,
 }
@@ -572,6 +578,7 @@ impl ThreadUnsubscribeCommandInput {
         model: impl Into<String>,
         permission_mode: impl Into<String>,
         thread_id: impl Into<String>,
+        resume_id: Option<String>,
         reason: impl Into<String>,
     ) -> Self {
         Self {
@@ -582,6 +589,7 @@ impl ThreadUnsubscribeCommandInput {
             model: model.into(),
             permission_mode: permission_mode.into(),
             thread_id: thread_id.into(),
+            resume_id: NullableString::from_string(resume_id),
             reason: reason.into(),
         }
     }

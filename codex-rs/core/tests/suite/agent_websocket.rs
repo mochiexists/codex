@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_features::Feature;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::protocol::SessionSource;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -80,7 +81,7 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create() -> Result<()> {
     ]])
     .await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_session_source(SessionSource::Cli);
     let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn_with_policy("hello", test.config.legacy_sandbox_policy())
         .await?;
@@ -127,7 +128,7 @@ async fn websocket_first_turn_handles_handshake_delay_with_startup_prewarm() -> 
     }])
     .await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_session_source(SessionSource::Cli);
     let test = builder.build_with_websocket_server(&server).await?;
     test.submit_turn_with_policy("hello", test.config.legacy_sandbox_policy())
         .await?;
@@ -253,12 +254,14 @@ async fn websocket_v2_first_turn_uses_updated_fast_tier_after_startup_prewarm() 
     ]])
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::ResponsesWebsocketsV2)
-            .expect("test config should allow feature update");
-    });
+    let mut builder = test_codex()
+        .with_session_source(SessionSource::Cli)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ResponsesWebsocketsV2)
+                .expect("test config should allow feature update");
+        });
     let test = builder.build_with_websocket_server(&server).await?;
 
     let warmup = server
@@ -308,13 +311,15 @@ async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Resu
     ]])
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::ResponsesWebsocketsV2)
-            .expect("test config should allow feature update");
-        config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
-    });
+    let mut builder = test_codex()
+        .with_session_source(SessionSource::Cli)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ResponsesWebsocketsV2)
+                .expect("test config should allow feature update");
+            config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+        });
     let test = builder.build_with_websocket_server(&server).await?;
 
     let warmup = server

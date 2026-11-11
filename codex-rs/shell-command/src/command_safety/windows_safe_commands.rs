@@ -403,6 +403,56 @@ mod tests {
     }
 
     #[test]
+    fn rejects_stop_parsing_git_forms() {
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "git log --% HEAD --output=codex_poc.txt",
+        ])));
+    }
+
+    #[test]
+    fn rejects_powershell_param_blocks() {
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "param([string]$path = (Get-Location)) Write-Output test",
+        ])));
+    }
+
+    #[test]
+    fn rejects_powershell_named_blocks() {
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "begin { Set-Content codex_poc.txt pwned } end { Get-Content Cargo.toml }",
+        ])));
+    }
+
+    #[test]
+    fn rejects_powershell_using_statements() {
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "using module ./codex_poc.psm1\nGet-Content Cargo.toml",
+        ])));
+    }
+
+    #[test]
+    fn rejects_powershell_trap_blocks() {
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "trap { Set-Content codex_poc.txt pwned; continue } Get-Content missing -ErrorAction Stop",
+        ])));
+    }
+
+    #[test]
     fn rejects_powershell_commands_with_side_effects() {
         assert!(!is_safe_command_windows(&vec_str(&[
             "powershell.exe",

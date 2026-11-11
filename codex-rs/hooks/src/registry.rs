@@ -19,6 +19,8 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::thread_unsubscribe::ThreadUnsubscribeOutcome;
+use crate::events::thread_unsubscribe::ThreadUnsubscribeRequest;
 use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::types::Hook;
@@ -30,6 +32,7 @@ use crate::types::HookResponse;
 pub struct HooksConfig {
     pub legacy_notify_argv: Option<Vec<String>>,
     pub feature_enabled: bool,
+    pub bypass_hook_trust: bool,
     pub config_layer_stack: Option<ConfigLayerStack>,
     pub plugin_hook_sources: Vec<PluginHookSource>,
     pub plugin_hook_load_warnings: Vec<String>,
@@ -65,6 +68,7 @@ impl Hooks {
             .collect();
         let engine = ClaudeHooksEngine::new(
             config.feature_enabled,
+            config.bypass_hook_trust,
             config.config_layer_stack.as_ref(),
             config.plugin_hook_sources,
             config.plugin_hook_load_warnings,
@@ -140,6 +144,20 @@ impl Hooks {
         self.engine.run_session_start(request, turn_id).await
     }
 
+    pub fn preview_thread_unsubscribe(
+        &self,
+        request: &ThreadUnsubscribeRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_thread_unsubscribe(request)
+    }
+
+    pub async fn run_thread_unsubscribe(
+        &self,
+        request: ThreadUnsubscribeRequest,
+    ) -> ThreadUnsubscribeOutcome {
+        self.engine.run_thread_unsubscribe(request).await
+    }
+
     pub async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
         self.engine.run_pre_tool_use(request).await
     }
@@ -212,6 +230,7 @@ pub fn list_hooks(config: HooksConfig) -> HookListOutcome {
         config.config_layer_stack.as_ref(),
         config.plugin_hook_sources,
         config.plugin_hook_load_warnings,
+        config.bypass_hook_trust,
     );
     HookListOutcome {
         hooks: discovered.hook_entries,

@@ -25,6 +25,8 @@ use crate::mcp::sanitize_responses_api_tool_name;
 pub(crate) const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str =
     "codex.mcp.tools.cache_write.duration_ms";
 
+const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInfo {
     /// Raw MCP server name used for routing the tool call.
@@ -111,9 +113,9 @@ impl ToolFilter {
     }
 }
 
-/// Returns the model-visible view of a tool while preserving the raw metadata
-/// used by execution. Keep cache entries raw and call this at manager return
-/// boundaries.
+/// Returns the model-visible view of a tool while preserving the raw metadata used by execution.
+/// Declared file parameters are presented as local file paths; execution later uploads those files
+/// and replaces the paths with the uploaded-file objects expected by the app.
 pub(crate) fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
     let file_params = declared_openai_file_input_param_names(tool.meta.as_deref());
     if file_params.is_empty() {
@@ -122,7 +124,7 @@ pub(crate) fn tool_with_model_visible_input_schema(tool: &Tool) -> Tool {
 
     let mut tool = tool.clone();
     let mut input_schema = JsonValue::Object(tool.input_schema.as_ref().clone());
-    mask_input_schema_for_file_path_params(&mut input_schema, &file_params);
+    rewrite_input_schema_for_local_file_paths(&mut input_schema, &file_params);
     if let JsonValue::Object(input_schema) = input_schema {
         tool.input_schema = Arc::new(input_schema);
     }
@@ -141,7 +143,13 @@ pub(crate) fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<Too
 /// Raw MCP server/tool names are kept on each [`ToolInfo`] for protocol calls, while
 /// `callable_namespace` / `callable_name` are sanitized and, when necessary, hashed so
 /// every model-visible name is unique and <= 64 bytes.
-pub(crate) fn normalize_tools_for_model<I>(tools: I) -> Vec<ToolInfo>
+///
+/// When `prefix_mcp_tool_names` is true, the historical `mcp__` namespace
+/// prefix is added without restoring the old trailing `__` namespace suffix.
+pub(crate) fn normalize_tools_for_model_with_prefix<I>(
+    tools: I,
+    prefix_mcp_tool_names: bool,
+) -> Vec<ToolInfo>
 where
     I: IntoIterator<Item = ToolInfo>,
 {
@@ -163,8 +171,13 @@ where
             continue;
         }
 
+        let callable_namespace = callable_namespace_with_prefix(
+            &sanitize_responses_api_tool_name(&tool.callable_namespace),
+            prefix_mcp_tool_names,
+        );
+
         candidates.push(CallableToolCandidate {
-            callable_namespace: sanitize_responses_api_tool_name(&tool.callable_namespace),
+            callable_namespace,
             callable_name: sanitize_responses_api_tool_name(&tool.callable_name),
             raw_namespace_identity,
             raw_tool_identity,
@@ -226,6 +239,7 @@ where
             &candidate.callable_name,
             &candidate.raw_tool_identity,
             &mut used_names,
+            MCP_TOOL_NAME_DELIMITER.len(),
         );
         candidate.tool.callable_namespace = callable_namespace;
         candidate.tool.callable_name = callable_name;
@@ -248,7 +262,7 @@ const MAX_TOOL_NAME_LENGTH: usize = 64;
 const CALLABLE_NAME_HASH_LEN: usize = 12;
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
 
-fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_params: &[String]) {
+fn rewrite_input_schema_for_local_file_paths(input_schema: &mut JsonValue, file_params: &[String]) {
     let Some(properties) = input_schema
         .as_object_mut()
         .and_then(|schema| schema.get_mut("properties"))
@@ -261,11 +275,11 @@ fn mask_input_schema_for_file_path_params(input_schema: &mut JsonValue, file_par
         let Some(property_schema) = properties.get_mut(field_name) else {
             continue;
         };
-        mask_input_property_schema(property_schema);
+        rewrite_input_property_schema_as_local_file_path(property_schema);
     }
 }
 
-fn mask_input_property_schema(schema: &mut JsonValue) {
+fn rewrite_input_property_schema_as_local_file_path(schema: &mut JsonValue) {
     let Some(object) = schema.as_object_mut() else {
         return;
     };
@@ -291,6 +305,14 @@ fn mask_input_property_schema(schema: &mut JsonValue) {
         object.insert("items".to_string(), serde_json::json!({ "type": "string" }));
     } else {
         object.insert("type".to_string(), JsonValue::String("string".to_string()));
+    }
+}
+
+fn callable_namespace_with_prefix(namespace: &str, prefix_mcp_tool_names: bool) -> String {
+    if !prefix_mcp_tool_names || namespace.starts_with(LEGACY_MCP_TOOL_NAME_PREFIX) {
+        namespace.to_string()
+    } else {
+        format!("{LEGACY_MCP_TOOL_NAME_PREFIX}{namespace}")
     }
 }
 
@@ -331,9 +353,10 @@ fn fit_callable_parts_with_hash(
     namespace: &str,
     tool_name: &str,
     raw_identity: &str,
+    reserved_len: usize,
 ) -> (String, String) {
     let suffix = callable_name_hash_suffix(raw_identity);
-    let max_tool_len = MAX_TOOL_NAME_LENGTH.saturating_sub(namespace.len());
+    let max_tool_len = MAX_TOOL_NAME_LENGTH.saturating_sub(namespace.len() + reserved_len);
     if max_tool_len >= suffix.len() {
         let prefix_len = max_tool_len - suffix.len();
         return (
@@ -342,7 +365,7 @@ fn fit_callable_parts_with_hash(
         );
     }
 
-    let max_namespace_len = MAX_TOOL_NAME_LENGTH - suffix.len();
+    let max_namespace_len = MAX_TOOL_NAME_LENGTH.saturating_sub(suffix.len() + reserved_len);
     (truncate_name(namespace, max_namespace_len), suffix)
 }
 
@@ -351,9 +374,10 @@ fn unique_callable_parts(
     tool_name: &str,
     raw_identity: &str,
     used_names: &mut HashSet<String>,
+    reserved_len: usize,
 ) -> (String, String) {
     let model_name = format!("{namespace}{tool_name}");
-    if model_name.len() <= MAX_TOOL_NAME_LENGTH && used_names.insert(model_name) {
+    if model_name.len() + reserved_len <= MAX_TOOL_NAME_LENGTH && used_names.insert(model_name) {
         return (namespace.to_string(), tool_name.to_string());
     }
 
@@ -365,7 +389,7 @@ fn unique_callable_parts(
             format!("{raw_identity}\0{attempt}")
         };
         let (namespace, tool_name) =
-            fit_callable_parts_with_hash(namespace, tool_name, &hash_input);
+            fit_callable_parts_with_hash(namespace, tool_name, &hash_input, reserved_len);
         let model_name = format!("{namespace}{tool_name}");
         if used_names.insert(model_name) {
             return (namespace, tool_name);

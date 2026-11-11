@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::outgoing_message::OutgoingMessageSender;
@@ -7,7 +8,7 @@ use codex_app_server_protocol::SkillsChangedNotification;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::skills::SkillsLoadInput;
-use codex_core::skills::SkillsManager;
+use codex_core::skills::SkillsService;
 use codex_file_watcher::FileWatcher;
 use codex_file_watcher::FileWatcherSubscriber;
 use codex_file_watcher::Receiver;
@@ -15,6 +16,9 @@ use codex_file_watcher::ThrottledWatchReceiver;
 use codex_file_watcher::WatchPath;
 use codex_file_watcher::WatchRegistration;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use tokio_util::sync::CancellationToken;
+use tokio_util::sync::DropGuard;
 use tracing::warn;
 
 #[cfg(not(test))]
@@ -24,11 +28,14 @@ const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(crate) struct SkillsWatcher {
     subscriber: FileWatcherSubscriber,
+    runtime_extra_roots_registration: Mutex<WatchRegistration>,
+    shutdown_token: CancellationToken,
+    _shutdown_drop_guard: DropGuard,
 }
 
 impl SkillsWatcher {
     pub(crate) fn new(
-        skills_manager: Arc<SkillsManager>,
+        skills_service: Arc<SkillsService>,
         outgoing: Arc<OutgoingMessageSender>,
     ) -> Arc<Self> {
         let file_watcher = match FileWatcher::new() {
@@ -39,8 +46,35 @@ impl SkillsWatcher {
             }
         };
         let (subscriber, rx) = file_watcher.add_subscriber();
-        Self::spawn_event_loop(rx, skills_manager, outgoing);
-        Arc::new(Self { subscriber })
+        let shutdown_token = CancellationToken::new();
+        let shutdown_drop_guard = shutdown_token.clone().drop_guard();
+        Self::spawn_event_loop(rx, skills_service, outgoing, shutdown_token.child_token());
+        Arc::new(Self {
+            subscriber,
+            runtime_extra_roots_registration: Mutex::new(WatchRegistration::default()),
+            shutdown_token,
+            _shutdown_drop_guard: shutdown_drop_guard,
+        })
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.shutdown_token.cancel();
+    }
+
+    pub(crate) fn register_runtime_extra_roots(&self, extra_roots: &[AbsolutePathBuf]) {
+        let roots = extra_roots
+            .iter()
+            .map(|root| WatchPath {
+                path: root.clone().into_path_buf(),
+                recursive: true,
+            })
+            .collect();
+        let registration = self.subscriber.register_paths(roots);
+        let mut guard = self
+            .runtime_extra_roots_registration
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = registration;
     }
 
     pub(crate) async fn register_thread_config(
@@ -76,10 +110,12 @@ impl SkillsWatcher {
             config.bundled_skills_enabled(),
         );
         let roots = thread_manager
-            .skills_manager()
+            .skills_service()
             .skill_roots_for_config(&skills_input, Some(environment.get_filesystem()))
             .await
             .into_iter()
+            // Plugin roots are invalidated by plugin lifecycle operations.
+            .filter(|root| root.plugin_id.is_none())
             .map(|root| WatchPath {
                 path: root.path.into_path_buf(),
                 recursive: true,
@@ -90,8 +126,9 @@ impl SkillsWatcher {
 
     fn spawn_event_loop(
         rx: Receiver,
-        skills_manager: Arc<SkillsManager>,
+        skills_service: Arc<SkillsService>,
         outgoing: Arc<OutgoingMessageSender>,
+        shutdown_token: CancellationToken,
     ) {
         let mut rx = ThrottledWatchReceiver::new(rx, WATCHER_THROTTLE_INTERVAL);
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -99,8 +136,15 @@ impl SkillsWatcher {
             return;
         };
         handle.spawn(async move {
-            while rx.recv().await.is_some() {
-                skills_manager.clear_cache();
+            loop {
+                let event = tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    event = rx.recv() => event,
+                };
+                if event.is_none() {
+                    break;
+                }
+                skills_service.clear_cache();
                 outgoing
                     .send_server_notification(ServerNotification::SkillsChanged(
                         SkillsChangedNotification {},

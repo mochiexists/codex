@@ -8,7 +8,8 @@ use crate::metrics::API_CALL_DURATION_METRIC;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
-use crate::metrics::PROFILE_USAGE_METRIC;
+use crate::metrics::PLUGIN_INSTALL_ELICITATION_SENT_METRIC;
+use crate::metrics::PLUGIN_INSTALL_SUGGESTION_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
 use crate::metrics::RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC;
@@ -93,6 +94,8 @@ pub struct SessionTelemetryMetadata {
     pub(crate) session_source: String,
     pub(crate) model: String,
     pub(crate) slug: String,
+    pub(crate) service_tier: Option<String>,
+    pub(crate) model_reasoning_effort: Option<String>,
     pub(crate) log_user_prompts: bool,
     pub(crate) app_version: &'static str,
     pub(crate) terminal_type: String,
@@ -114,6 +117,16 @@ impl SessionTelemetry {
     pub fn with_model(mut self, model: &str, slug: &str) -> Self {
         self.metadata.model = model.to_owned();
         self.metadata.slug = slug.to_owned();
+        self
+    }
+
+    pub fn with_inference_request(
+        mut self,
+        service_tier: Option<&str>,
+        model_reasoning_effort: Option<&ReasoningEffort>,
+    ) -> Self {
+        self.metadata.service_tier = service_tier.map(str::to_owned);
+        self.metadata.model_reasoning_effort = model_reasoning_effort.map(ToString::to_string);
         self
     }
 
@@ -230,6 +243,67 @@ impl SessionTelemetry {
         );
     }
 
+    /// Records the moment a plugin or connector install elicitation is dispatched.
+    pub fn record_plugin_install_elicitation_sent(
+        &self,
+        tool_type: &str,
+        tool_id: &str,
+        tool_name: &str,
+    ) {
+        self.counter(
+            PLUGIN_INSTALL_ELICITATION_SENT_METRIC,
+            /*inc*/ 1,
+            &[("tool_type", tool_type)],
+        );
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.plugin_install_elicitation_sent",
+                plugin_install.tool_type = tool_type,
+                plugin_install.tool_id = tool_id,
+                plugin_install.tool_name = tool_name,
+            },
+            log: {},
+            trace: {},
+        );
+    }
+
+    /// Records the outcome of a surfaced plugin or connector install suggestion.
+    pub fn record_plugin_install_suggestion(
+        &self,
+        tool_type: &str,
+        tool_id: &str,
+        tool_name: &str,
+        response_action: &str,
+        user_confirmed: bool,
+        completed: bool,
+    ) {
+        let completed_tag = if completed { "true" } else { "false" };
+        self.counter(
+            PLUGIN_INSTALL_SUGGESTION_METRIC,
+            /*inc*/ 1,
+            &[
+                ("tool_type", tool_type),
+                ("response_action", response_action),
+                ("completed", completed_tag),
+            ],
+        );
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.plugin_install_suggestion",
+                plugin_install.tool_type = tool_type,
+                plugin_install.tool_id = tool_id,
+                plugin_install.tool_name = tool_name,
+                plugin_install.response_action = response_action,
+                plugin_install.user_confirmed = user_confirmed,
+                plugin_install.completed = completed,
+            },
+            log: {},
+            trace: {},
+        );
+    }
+
     pub fn start_timer(&self, name: &str, tags: &[(&str, &str)]) -> Result<Timer, MetricsError> {
         let Some(metrics) = &self.metrics else {
             return Err(MetricsError::ExporterDisabled);
@@ -327,6 +401,8 @@ impl SessionTelemetry {
                 session_source: session_source.to_string(),
                 model: model.to_owned(),
                 slug: slug.to_owned(),
+                service_tier: None,
+                model_reasoning_effort: None,
                 log_user_prompts,
                 app_version: env!("CARGO_PKG_VERSION"),
                 terminal_type,
@@ -384,11 +460,7 @@ impl SessionTelemetry {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
         mcp_servers: Vec<&str>,
-        active_profile: Option<String>,
     ) {
-        if active_profile.is_some() {
-            self.counter(PROFILE_USAGE_METRIC, /*inc*/ 1, &[]);
-        }
         log_and_trace_event!(
             self,
             common: {
@@ -400,7 +472,7 @@ impl SessionTelemetry {
                 auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
                 auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
                 auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
-                reasoning_effort = reasoning_effort.map(|e| e.to_string()),
+                reasoning_effort = reasoning_effort.as_ref().map(ToString::to_string),
                 reasoning_summary = %reasoning_summary,
                 context_window = context_window,
                 auto_compact_token_limit = auto_compact_token_limit,
@@ -409,11 +481,9 @@ impl SessionTelemetry {
             },
             log: {
                 mcp_servers = mcp_servers.join(", "),
-                active_profile = active_profile,
             },
             trace: {
                 mcp_server_count = mcp_servers.len() as i64,
-                active_profile_present = active_profile.is_some(),
             },
         );
     }
@@ -651,7 +721,6 @@ impl SessionTelemetry {
         duration: Duration,
     ) {
         let mut kind = None;
-        let mut error_message = None;
         let mut success = true;
 
         match result {
@@ -668,49 +737,26 @@ impl SessionTelemetry {
                             }
                             if kind.as_deref() == Some("response.failed") {
                                 success = false;
-                                error_message = value
-                                    .get("response")
-                                    .and_then(|value| value.get("error"))
-                                    .map(serde_json::Value::to_string)
-                                    .or_else(|| Some("response.failed event received".to_string()));
                             }
                         }
-                        Err(err) => {
+                        Err(_) => {
                             kind = Some("parse_error".to_string());
-                            error_message = Some(err.to_string());
                             success = false;
                         }
                     }
-                }
-                tokio_tungstenite::tungstenite::Message::Binary(_) => {
-                    success = false;
-                    error_message = Some("unexpected binary websocket event".to_string());
                 }
                 tokio_tungstenite::tungstenite::Message::Ping(_)
                 | tokio_tungstenite::tungstenite::Message::Pong(_) => {
                     return;
                 }
-                tokio_tungstenite::tungstenite::Message::Close(_) => {
+                tokio_tungstenite::tungstenite::Message::Binary(_)
+                | tokio_tungstenite::tungstenite::Message::Close(_)
+                | tokio_tungstenite::tungstenite::Message::Frame(_) => {
                     success = false;
-                    error_message =
-                        Some("websocket closed by server before response.completed".to_string());
-                }
-                tokio_tungstenite::tungstenite::Message::Frame(_) => {
-                    success = false;
-                    error_message = Some("unexpected websocket frame".to_string());
                 }
             },
-            Ok(Some(Err(err))) => {
+            Ok(Some(Err(_))) | Ok(None) | Err(_) => {
                 success = false;
-                error_message = Some(err.to_string());
-            }
-            Ok(None) => {
-                success = false;
-                error_message = Some("stream closed before response.completed".to_string());
-            }
-            Err(err) => {
-                success = false;
-                error_message = Some(err.to_string());
             }
         }
 
@@ -719,18 +765,6 @@ impl SessionTelemetry {
         let tags = [("kind", kind_str), ("success", success_str)];
         self.counter(WEBSOCKET_EVENT_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(WEBSOCKET_EVENT_DURATION_METRIC, duration, &tags);
-        log_and_trace_event!(
-            self,
-            common: {
-                event.name = "codex.websocket_event",
-                event.kind = %kind_str,
-                duration_ms = %duration.as_millis(),
-                success = success_str,
-                error.message = error_message.as_deref(),
-            },
-            log: {},
-            trace: {},
-        );
     }
 
     pub fn log_sse_event<E>(
@@ -876,6 +910,8 @@ impl SessionTelemetry {
                 cached_token_count = cached_token_count,
                 reasoning_token_count = reasoning_token_count,
                 tool_token_count = %tool_token_count,
+                service_tier = self.metadata.service_tier.as_deref(),
+                model_reasoning_effort = self.metadata.model_reasoning_effort.as_deref(),
             },
             log: {},
             trace: {},
@@ -939,6 +975,37 @@ impl SessionTelemetry {
             call_id = %call_id,
             decision = %decision.clone().to_string().to_lowercase(),
             source = %source.to_string(),
+        );
+    }
+
+    pub fn sandbox_outcome(
+        &self,
+        tool_name: &str,
+        call_id: &str,
+        outcome: &str,
+        initial_duration: Duration,
+        escalated_duration: Option<Duration>,
+    ) {
+        let initial_duration_ms = initial_duration.as_millis().min(i64::MAX as u128) as i64;
+        let escalated_duration_ms =
+            escalated_duration.map(|duration| duration.as_millis().min(i64::MAX as u128) as i64);
+        log_event!(
+            self,
+            event.name = "codex.sandbox_outcome",
+            tool_name = %tool_name,
+            call_id = %call_id,
+            outcome = %outcome,
+            initial_duration_ms = initial_duration_ms,
+            escalated_duration_ms = escalated_duration_ms,
+        );
+        trace_event!(
+            self,
+            event.name = "codex.sandbox_outcome",
+            tool_name = %tool_name,
+            call_id = %call_id,
+            outcome = %outcome,
+            initial_duration_ms = initial_duration_ms,
+            escalated_duration_ms = escalated_duration_ms,
         );
     }
 
@@ -1121,6 +1188,8 @@ impl SessionTelemetry {
             }
             ResponseEvent::ServerModel(_) => "server_model".into(),
             ResponseEvent::ModelVerifications(_) => "model_verifications".into(),
+            ResponseEvent::TurnModerationMetadata(_) => "turn_moderation_metadata".into(),
+            ResponseEvent::SafetyBuffering(_) => "safety_buffering".into(),
             ResponseEvent::ServerReasoningIncluded(_) => "server_reasoning_included".into(),
             ResponseEvent::RateLimits(_) => "rate_limits".into(),
             ResponseEvent::ModelsEtag(_) => "models_etag".into(),
@@ -1129,7 +1198,9 @@ impl SessionTelemetry {
 
     fn responses_item_type(item: &ResponseItem) -> String {
         match item {
+            ResponseItem::AdditionalTools { .. } => "additional_tools".into(),
             ResponseItem::Message { role, .. } => format!("message_from_{role}"),
+            ResponseItem::AgentMessage { .. } => "agent_message".into(),
             ResponseItem::Reasoning { .. } => "reasoning".into(),
             ResponseItem::LocalShellCall { .. } => "local_shell_call".into(),
             ResponseItem::FunctionCall { .. } => "function_call".into(),
@@ -1141,6 +1212,7 @@ impl SessionTelemetry {
             ResponseItem::WebSearchCall { .. } => "web_search_call".into(),
             ResponseItem::ImageGenerationCall { .. } => "image_generation_call".into(),
             ResponseItem::Compaction { .. } => "compaction".into(),
+            ResponseItem::CompactionTrigger { .. } => "compaction_trigger".into(),
             ResponseItem::ContextCompaction { .. } => "context_compaction".into(),
             ResponseItem::Other => "other".into(),
         }

@@ -16,26 +16,42 @@ filesystem operations and `codex-linux-sandbox`.
 
 ## Transport
 
-The server speaks the shared `codex-app-server-protocol` message envelope on
-the wire.
+The server speaks the exec-specific `codex-exec-server-protocol` message
+envelope on the wire.
 
 The CLI entrypoint supports:
 
 - `ws://IP:PORT` (default)
-- `--remote URL --executor-id ID [--name NAME]`
+- `--remote URL --environment-id ID [--name NAME]`
 
-Remote mode registers the local exec-server with the executor registry,
-then reconnects to the service-provided rendezvous websocket as the executor.
-It requires a bearer token in `CODEX_EXEC_SERVER_REMOTE_BEARER_TOKEN`.
+Remote mode registers the local exec-server with the environment registry,
+then reconnects to the service-provided rendezvous websocket as the environment.
+Remote communication uses the Noise relay contract; the registry and harness
+must support it.
+It uses the standard Codex ChatGPT sign-in state; run `codex login` first when
+remote registration needs authentication. Containerized callers that receive an
+Agent Identity JWT in `CODEX_ACCESS_TOKEN` can opt into that auth path with
+`--use-agent-identity-auth`; Codex then registers an Agent task and sends the
+derived AgentAssertion headers on the registry request.
+
+Alternatively, API users can instead use `CODEX_API_KEY`;
+Codex sends it as a bearer token on the registration request. For example:
+
+```sh
+CODEX_API_KEY="$OPENAI_API_KEY" \
+codex exec-server \
+  --remote ... \
+  --environment-id "$ENVIRONMENT_ID"
+```
 
 Wire framing:
 
 - local websocket: one JSON-RPC message per websocket frame
-- remote websocket: binary protobuf relay frames carrying JSON-RPC payloads
+- Noise remote websocket: binary protobuf relay frames carrying encrypted payloads
 
 ## Remote Relay Message Format
 
-In remote mode, the harness and executor communicate through rendezvous using
+In remote mode, the harness and environment communicate through rendezvous using
 `codex.exec_server.relay.v1.RelayMessageFrame`; the checked-in schema is in
 `src/proto/codex.exec_server.relay.v1.proto`. The relay frame carries stream
 identity plus endpoint-owned reliability metadata:
@@ -43,19 +59,19 @@ identity plus endpoint-owned reliability metadata:
 ```text
 version
 stream_id
-body              // data | ack_frame | resume | reset | heartbeat
+body              // handshake | data | ack_frame | resume | reset | heartbeat
 ack               // highest contiguous peer segment seq received
 ack_bits          // bitset for peer segment seqs after ack
 seq               // data only: segment sequence number
 segment_index     // data only: 0-based index within message
 segment_count     // data only: number of segments in message
-payload           // data only: JSON-RPC message bytes or segment bytes
+payload           // handshake bytes or encrypted data record
 next_seq          // resume only: next sender seq
 reason            // reset only: reset reason
 ```
 
-`stream_id` identifies one virtual harness/executor JSON-RPC session on the
-executor websocket. The harness generates a UUIDv4 `stream_id`; the executor
+`stream_id` identifies one virtual harness/environment JSON-RPC session on the
+environment websocket. The harness generates a UUIDv4 `stream_id`; the environment
 demuxes frames by `stream_id` and runs an independent `ConnectionProcessor` per
 stream.
 
@@ -143,7 +159,7 @@ Request params:
 {
   "processId": "proc-1",
   "argv": ["bash", "-lc", "printf 'hello\\n'"],
-  "cwd": "/absolute/working/directory",
+  "cwd": "file:///absolute/working/directory",
   "env": {
     "PATH": "/usr/bin:/bin"
   },
@@ -157,7 +173,7 @@ Field definitions:
 
 - `processId`: caller-chosen stable id for this process within the connection.
 - `argv`: command vector. It must be non-empty.
-- `cwd`: absolute working directory used for the child process.
+- `cwd`: `file:` URI for the child process working directory.
 - `env`: environment variables passed to the child process.
 - `tty`: when `true`, spawn a PTY-backed interactive process.
 - `pipeStdin`: when `true`, keep non-PTY stdin writable via `process/write`.
@@ -324,13 +340,17 @@ Params:
 
 ## Filesystem RPCs
 
-Filesystem methods use absolute paths and return JSON-RPC errors for invalid
-or unavailable paths:
+Filesystem methods require valid `file:` URI strings and return JSON-RPC errors
+for invalid or unavailable paths. Native absolute path strings are rejected;
+callers must convert them to `file:` URIs before sending requests:
 
 - `fs/readFile`
+- `fs/open`, `fs/readBlock`, and `fs/close` (internal transport for
+  `ExecutorFileSystem::read_file_stream`)
 - `fs/writeFile`
 - `fs/createDirectory`
 - `fs/getMetadata`
+- `fs/canonicalize`
 - `fs/readDirectory`
 - `fs/remove`
 - `fs/copy`
@@ -371,12 +391,14 @@ The crate exports:
 - `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
 - `ExecServerRuntimePaths`
 - `run_main()` for embedding the websocket server
-- `RemoteExecutorConfig` and `run_remote_executor()` for embedding remote
+- `RemoteEnvironmentConfig` and `run_remote_environment()` for embedding remote
   registration mode
 
 Callers must pass `ExecServerRuntimePaths` to `run_main()`. The top-level
 `codex exec-server` command builds these paths from the `codex` arg0 dispatch
-state.
+state. `RemoteEnvironmentConfig::new(...)` also takes the auth provider that
+remote registration should use; the CLI builds that provider from Codex auth
+state before starting remote mode.
 
 ## Example session
 
@@ -391,7 +413,7 @@ Initialize:
 Start a process:
 
 ```json
-{"id":2,"method":"process/start","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"pipeStdin":false,"arg0":null}}
+{"id":2,"method":"process/start","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"file:///tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"pipeStdin":false,"arg0":null}}
 {"id":2,"result":{"processId":"proc-1"}}
 {"method":"process/output","params":{"processId":"proc-1","seq":1,"stream":"stdout","chunk":"cmVhZHkK"}}
 ```

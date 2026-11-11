@@ -5,6 +5,7 @@ use codex_mcp::ElicitationReviewerHandle;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPROVAL_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as MCP_ELICITATION_APPROVAL_KIND_MCP_TOOL_CALL;
+use codex_protocol::mcp_approval_meta::APPROVAL_KIND_TOOL_SUGGESTION as MCP_ELICITATION_APPROVAL_KIND_TOOL_SUGGESTION;
 use codex_protocol::mcp_approval_meta::APPROVALS_REVIEWER_KEY as MCP_ELICITATION_APPROVALS_REVIEWER_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_DESCRIPTION_KEY as MCP_ELICITATION_CONNECTOR_DESCRIPTION_KEY;
 use codex_protocol::mcp_approval_meta::CONNECTOR_ID_KEY as MCP_ELICITATION_CONNECTOR_ID_KEY;
@@ -15,12 +16,16 @@ use codex_protocol::mcp_approval_meta::TOOL_DESCRIPTION_KEY as MCP_ELICITATION_T
 use codex_protocol::mcp_approval_meta::TOOL_NAME_KEY as MCP_ELICITATION_TOOL_NAME_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_PARAMS_KEY as MCP_ELICITATION_TOOL_PARAMS_KEY;
 use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_ELICITATION_TOOL_TITLE_KEY;
-use rmcp::model::CreateElicitationRequestParams;
+use codex_rmcp_client::Elicitation;
 use rmcp::model::ElicitationAction;
 use rmcp::model::Meta;
 use serde_json::Map;
 
 const MCP_ELICITATION_DECLINE_MESSAGE_KEY: &str = "message";
+const TOOL_SUGGESTION_ACTION_INSTALL: &str = "install";
+const TOOL_SUGGESTION_ACTION_KEY: &str = "suggest_type";
+const TOOL_SUGGESTION_TOOL_ID_KEY: &str = "tool_id";
+const TOOL_SUGGESTION_TOOL_TYPE_KEY: &str = "tool_type";
 
 #[derive(Debug, PartialEq)]
 enum GuardianElicitationReview {
@@ -31,6 +36,18 @@ enum GuardianElicitationReview {
 
 struct GuardianMcpElicitationReviewer {
     session: std::sync::Weak<Session>,
+}
+
+pub(crate) struct McpServerElicitationOutcome {
+    pub(crate) response: Option<ElicitationResponse>,
+    pub(crate) sent: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PluginInstallElicitationTelemetryMetadata {
+    tool_type: String,
+    tool_id: String,
+    tool_name: String,
 }
 
 impl GuardianMcpElicitationReviewer {
@@ -57,6 +74,20 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
 }
 
 impl Session {
+    pub(crate) async fn runtime_mcp_config(&self, config: &Config) -> McpConfig {
+        self.services
+            .mcp_manager
+            .runtime_config_for_thread(config, &self.services.mcp_thread_init)
+            .await
+    }
+
+    pub(crate) async fn runtime_mcp_servers(
+        &self,
+        config: &Config,
+    ) -> HashMap<String, McpServerConfig> {
+        codex_mcp::configured_mcp_servers(&self.runtime_mcp_config(config).await)
+    }
+
     pub(crate) fn mcp_elicitation_reviewer(self: &Arc<Self>) -> ElicitationReviewerHandle {
         Arc::new(GuardianMcpElicitationReviewer::new(self))
     }
@@ -70,19 +101,21 @@ impl Session {
         turn_context: &TurnContext,
         request_id: RequestId,
         params: McpServerElicitationRequestParams,
-    ) -> Option<ElicitationResponse> {
+    ) -> McpServerElicitationOutcome {
         if self
             .services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .elicitations_auto_deny()
         {
-            return Some(ElicitationResponse {
-                action: codex_rmcp_client::ElicitationAction::Accept,
-                content: Some(serde_json::json!({})),
-                meta: None,
-            });
+            return McpServerElicitationOutcome {
+                response: Some(ElicitationResponse {
+                    action: codex_rmcp_client::ElicitationAction::Accept,
+                    content: Some(serde_json::json!({})),
+                    meta: None,
+                }),
+                sent: false,
+            };
         }
 
         let server_name = params.server_name.clone();
@@ -98,7 +131,10 @@ impl Session {
                         warn!(
                             "failed to serialize MCP elicitation schema for server_name: {server_name}, request_id: {request_id}: {err:#}"
                         );
-                        return None;
+                        return McpServerElicitationOutcome {
+                            response: None,
+                            sent: false,
+                        };
                     }
                 };
                 codex_protocol::approvals::ElicitationRequest::Form {
@@ -107,6 +143,15 @@ impl Session {
                     requested_schema,
                 }
             }
+            McpServerElicitationRequest::OpenAiForm {
+                meta,
+                message,
+                requested_schema,
+            } => codex_protocol::approvals::ElicitationRequest::OpenAiForm {
+                meta,
+                message,
+                requested_schema,
+            },
             McpServerElicitationRequest::Url {
                 meta,
                 message,
@@ -154,8 +199,24 @@ impl Session {
             id,
             request,
         });
+        let plugin_install_telemetry = plugin_install_elicitation_telemetry_metadata(&event);
+        turn_context
+            .turn_metadata_state
+            .mark_user_input_requested_during_turn();
         self.send_event(turn_context, event).await;
-        rx_response.await.ok()
+        if let Some(plugin_install_telemetry) = plugin_install_telemetry {
+            turn_context
+                .session_telemetry
+                .record_plugin_install_elicitation_sent(
+                    plugin_install_telemetry.tool_type.as_str(),
+                    plugin_install_telemetry.tool_id.as_str(),
+                    plugin_install_telemetry.tool_name.as_str(),
+                );
+        }
+        McpServerElicitationOutcome {
+            response: rx_response.await.ok(),
+            sent: true,
+        }
     }
 
     #[expect(
@@ -187,16 +248,11 @@ impl Session {
 
         self.services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .resolve_elicitation(server_name, id, response)
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource calls are serialized through the session-owned manager guard"
-    )]
     pub async fn list_resources(
         &self,
         server: &str,
@@ -204,16 +260,11 @@ impl Session {
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .list_resources(server, params)
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource calls are serialized through the session-owned manager guard"
-    )]
     pub async fn list_resource_templates(
         &self,
         server: &str,
@@ -221,16 +272,11 @@ impl Session {
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .list_resource_templates(server, params)
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP resource calls are serialized through the session-owned manager guard"
-    )]
     pub async fn read_resource(
         &self,
         server: &str,
@@ -238,16 +284,11 @@ impl Session {
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .read_resource(server, params)
             .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "MCP tool calls are serialized through the session-owned manager guard"
-    )]
     pub async fn call_tool(
         &self,
         server: &str,
@@ -257,8 +298,7 @@ impl Session {
     ) -> anyhow::Result<CallToolResult> {
         self.services
             .mcp_connection_manager
-            .read()
-            .await
+            .load_full()
             .call_tool(server, tool, arguments, meta)
             .await
     }
@@ -268,77 +308,74 @@ impl Session {
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
-        let mcp_config = config
-            .to_mcp_config(self.services.plugins_manager.as_ref())
-            .await;
-        let tool_plugin_provenance = self
-            .services
-            .mcp_manager
-            .tool_plugin_provenance(config.as_ref())
-            .await;
+        let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
+        let tool_plugin_provenance = codex_mcp::tool_plugin_provenance(&mcp_config);
         let mcp_servers =
             effective_mcp_servers_from_configured(mcp_servers, &mcp_config, auth.as_ref());
-        let host_owned_codex_apps_enabled =
-            host_owned_codex_apps_enabled(&mcp_config, auth.as_ref());
-        let auth_statuses =
-            compute_auth_statuses(mcp_servers.iter(), store_mode, auth.as_ref()).await;
-        let mcp_runtime_environment = match turn_context.environments.primary() {
-            Some(turn_environment) => McpRuntimeEnvironment::new(
-                Arc::clone(&turn_environment.environment),
-                turn_environment.cwd.to_path_buf(),
-            ),
-            None => McpRuntimeEnvironment::new(
-                self.services
-                    .environment_manager
-                    .default_environment()
-                    .unwrap_or_else(|| self.services.environment_manager.local_environment()),
-                turn_context.cwd.to_path_buf(),
-            ),
-        };
-        {
+        let auth_statuses = compute_auth_statuses(
+            mcp_servers.iter(),
+            store_mode,
+            keyring_backend_kind,
+            auth.as_ref(),
+        )
+        .await;
+        let environment_manager = self.services.turn_environments.environment_manager();
+        // TODO(anp): Migrate MCP runtime cwd plumbing to PathUri so foreign environment cwd
+        // values can be used without falling back to the legacy host cwd.
+        let cwd = turn_context
+            .environments
+            .primary()
+            .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
+            .map(|cwd| cwd.to_path_buf())
+            .unwrap_or_else(|| {
+                #[allow(deprecated)]
+                turn_context.cwd.to_path_buf()
+            });
+        let mcp_runtime_context = McpRuntimeContext::new(environment_manager, cwd);
+        let mcp_startup_cancellation_token = {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
-            *guard = CancellationToken::new();
-        }
-        let (refreshed_manager, cancel_token) = McpConnectionManager::new(
+            let cancellation_token = CancellationToken::new();
+            *guard = cancellation_token.clone();
+            cancellation_token
+        };
+        let refreshed_manager = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
+            keyring_backend_kind,
             auth_statuses,
             &turn_context.approval_policy,
             turn_context.sub_id.clone(),
             self.get_tx_event(),
+            mcp_startup_cancellation_token,
             turn_context.permission_profile(),
-            mcp_runtime_environment,
+            mcp_runtime_context,
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
-            host_owned_codex_apps_enabled,
+            mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
+            self.services
+                .supports_openai_form_elicitation
+                .load(std::sync::atomic::Ordering::Relaxed),
             tool_plugin_provenance,
             auth.as_ref(),
             elicitation_reviewer,
         )
         .await;
         {
-            let current_manager = self.services.mcp_connection_manager.read().await;
+            let current_manager = self.services.mcp_connection_manager.load_full();
             refreshed_manager.set_elicitations_auto_deny(current_manager.elicitations_auto_deny());
         }
-        {
-            let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
-            if guard.is_cancelled() {
-                cancel_token.cancel();
-            }
-            *guard = cancel_token;
-        }
-
-        let mut old_manager = {
-            let mut manager = self.services.mcp_connection_manager.write().await;
-            std::mem::replace(&mut *manager, refreshed_manager)
-        };
-        old_manager.shutdown().await;
+        let superseded_manager = self
+            .services
+            .mcp_connection_manager
+            .swap(Arc::new(refreshed_manager));
+        superseded_manager.shutdown().await;
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(
@@ -354,6 +391,7 @@ impl Session {
         let McpServerRefreshConfig {
             mcp_servers,
             mcp_oauth_credentials_store_mode,
+            auth_keyring_backend_kind,
         } = refresh_config;
 
         let mcp_servers =
@@ -373,9 +411,51 @@ impl Session {
                 return;
             }
         };
+        let keyring_backend_kind =
+            match serde_json::from_value::<AuthKeyringBackendKind>(auth_keyring_backend_kind) {
+                Ok(kind) => kind,
+                Err(err) => {
+                    warn!("failed to parse MCP auth keyring backend refresh config: {err}");
+                    return;
+                }
+            };
 
-        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode, elicitation_reviewer)
-            .await;
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_servers,
+            store_mode,
+            keyring_backend_kind,
+            elicitation_reviewer,
+        )
+        .await;
+    }
+
+    pub(crate) async fn set_openai_form_elicitation_support(
+        &self,
+        supported: bool,
+    ) -> anyhow::Result<()> {
+        if self
+            .services
+            .supports_openai_form_elicitation
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == supported
+        {
+            return Ok(());
+        }
+
+        let config = self.get_config().await;
+        let refresh_config = McpServerRefreshConfig {
+            mcp_servers: serde_json::to_value(config.mcp_servers.get())?,
+            mcp_oauth_credentials_store_mode: serde_json::to_value(
+                config.mcp_oauth_credentials_store_mode,
+            )?,
+            auth_keyring_backend_kind: serde_json::to_value(config.auth_keyring_backend_kind())?,
+        };
+        self.services
+            .supports_openai_form_elicitation
+            .store(supported, std::sync::atomic::Ordering::Relaxed);
+        *self.pending_mcp_server_refresh_config.lock().await = Some(refresh_config);
+        Ok(())
     }
 
     pub(crate) async fn refresh_mcp_servers_now(
@@ -383,10 +463,17 @@ impl Session {
         turn_context: &TurnContext,
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode, elicitation_reviewer)
-            .await;
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_servers,
+            store_mode,
+            keyring_backend_kind,
+            elicitation_reviewer,
+        )
+        .await;
     }
 
     #[cfg(test)]
@@ -417,7 +504,15 @@ async fn review_guardian_mcp_elicitation(
         return Ok(None);
     };
 
-    if !crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
+    let approvals_reviewer = crate::connectors::mcp_approvals_reviewer(
+        turn_context.config.as_ref(),
+        request.server_name.as_str(),
+        elicitation_connector_id(&request.elicitation),
+    );
+    if !crate::guardian::routes_approval_to_guardian_with_reviewer(
+        turn_context.as_ref(),
+        approvals_reviewer,
+    ) {
         return Ok(None);
     }
 
@@ -454,12 +549,15 @@ fn guardian_elicitation_review_request(
     request: &ElicitationReviewRequest,
 ) -> GuardianElicitationReview {
     let (meta, requested_schema) = match &request.elicitation {
-        CreateElicitationRequestParams::FormElicitationParams {
+        Elicitation::Mcp(rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
             meta,
             requested_schema,
             ..
-        } => (meta, Some(requested_schema)),
-        CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => {
+        }) => (meta, Some(requested_schema)),
+        Elicitation::Mcp(rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+            meta,
+            ..
+        }) => {
             return if meta_requests_approval_request(meta) {
                 GuardianElicitationReview::Decline(
                     "guardian MCP elicitation review only supports form elicitations",
@@ -468,6 +566,7 @@ fn guardian_elicitation_review_request(
                 GuardianElicitationReview::NotRequested
             };
         }
+        Elicitation::OpenAiForm { .. } => return GuardianElicitationReview::NotRequested,
     };
 
     let Some(meta) = meta.as_ref().map(|meta| &meta.0) else {
@@ -522,11 +621,18 @@ fn guardian_elicitation_review_request(
                 meta,
                 MCP_ELICITATION_CONNECTOR_DESCRIPTION_KEY,
             ),
+            connected_account_email: None,
             tool_title: metadata_owned_string(meta, MCP_ELICITATION_TOOL_TITLE_KEY),
             tool_description: metadata_owned_string(meta, MCP_ELICITATION_TOOL_DESCRIPTION_KEY),
             annotations: None,
         },
     ))
+}
+
+fn elicitation_connector_id(elicitation: &Elicitation) -> Option<&str> {
+    elicitation
+        .meta()
+        .and_then(|meta| metadata_str(meta, MCP_ELICITATION_CONNECTOR_ID_KEY))
 }
 
 fn meta_requests_approval_request(meta: &Option<Meta>) -> bool {
@@ -544,6 +650,33 @@ fn metadata_owned_string(meta: &Map<String, Value>, key: &str) -> Option<String>
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn plugin_install_elicitation_telemetry_metadata(
+    event: &EventMsg,
+) -> Option<PluginInstallElicitationTelemetryMetadata> {
+    let EventMsg::ElicitationRequest(ElicitationRequestEvent { request, .. }) = event else {
+        return None;
+    };
+    let codex_protocol::approvals::ElicitationRequest::Form {
+        meta: Some(Value::Object(meta)),
+        ..
+    } = request
+    else {
+        return None;
+    };
+    if metadata_str(meta, MCP_ELICITATION_APPROVAL_KIND_KEY)
+        != Some(MCP_ELICITATION_APPROVAL_KIND_TOOL_SUGGESTION)
+        || metadata_str(meta, TOOL_SUGGESTION_ACTION_KEY) != Some(TOOL_SUGGESTION_ACTION_INSTALL)
+    {
+        return None;
+    }
+
+    Some(PluginInstallElicitationTelemetryMetadata {
+        tool_type: metadata_owned_string(meta, TOOL_SUGGESTION_TOOL_TYPE_KEY)?,
+        tool_id: metadata_owned_string(meta, TOOL_SUGGESTION_TOOL_ID_KEY)?,
+        tool_name: metadata_owned_string(meta, MCP_ELICITATION_TOOL_NAME_KEY)?,
+    })
 }
 
 fn mcp_elicitation_request_id(id: &RequestId) -> String {
